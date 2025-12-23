@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { ToolLoopAgent, tool, stepCountIs } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createOpenAI, openai } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { execSync } from 'child_process';
 import * as fs from 'fs-extra';
@@ -17,7 +17,13 @@ if (fs.existsSync(agentEnvPath)) {
   dotenv.config();
 }
 
-// Model Selection for Dec 2025
+// Setup AI provider (Prefer OpenRouter for more recent models if needed)
+const openrouter = createOpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
+});
+
+// Model Selection: Use gpt-4o-mini for stable agent orchestration
 const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gpt-4o-mini';
 
 const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
@@ -34,33 +40,18 @@ const tools = {
     execute: async () => {
       console.log('[SYNTROPY] Tool: getEcosystemStatus');
       try {
-        // Use --no-daemon to avoid some background noise, and clean the string
         const rawOutput = execSync('pm2 jlist', { timeout: 10000 }).toString().trim();
-        
-        // Find the start of the JSON array '[' and the end ']'
         const startIndex = rawOutput.indexOf('[');
         const endIndex = rawOutput.lastIndexOf(']');
-        
-        if (startIndex === -1 || endIndex === -1) {
-          return { error: "No JSON array found in PM2 output", raw: rawOutput.slice(0, 100) };
-        }
-        
-        const jsonString = rawOutput.substring(startIndex, endIndex + 1);
-        const processes = JSON.parse(jsonString);
-        
-        return processes.map((p: any) => {
-          try {
-            return {
-              name: p.name,
-              status: p.pm2_env?.status || 'unknown',
-              cpu: p.monit?.cpu || 0,
-              memory: (p.monit?.memory || 0) / (1024 * 1024), // MB
-              uptime_seconds: p.pm2_env?.pm_uptime ? Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000) : 0
-            };
-          } catch (e) {
-            return { name: p.name, error: "Failed to parse process data" };
-          }
-        });
+        if (startIndex === -1 || endIndex === -1) return { error: "No JSON found" };
+        const processes = JSON.parse(rawOutput.substring(startIndex, endIndex + 1));
+        return processes.map((p: any) => ({
+          name: p.name,
+          status: p.pm2_env?.status || 'unknown',
+          cpu: p.monit?.cpu || 0,
+          memory: (p.monit?.memory || 0) / (1024 * 1024),
+          uptime_seconds: p.pm2_env?.pm_uptime ? Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000) : 0
+        }));
       } catch (error: any) {
         return { error: `PM2 error: ${error.message}` };
       }
@@ -76,10 +67,9 @@ const tools = {
       console.log(`[SYNTROPY] Tool: readAgentLogs (${lines} lines)`);
       try {
         if (fs.existsSync(LOG_PATH)) {
-          const content = execSync(`tail -n ${lines} ${LOG_PATH}`, { timeout: 5000 }).toString();
-          return content;
+          return execSync(`tail -n ${lines} ${LOG_PATH}`, { timeout: 5000 }).toString();
         }
-        return "Log file not found at " + LOG_PATH;
+        return "Log file not found";
       } catch (error: any) {
         return { error: error.message };
       }
@@ -94,20 +84,13 @@ const tools = {
     execute: async () => {
       console.log('[SYNTROPY] Tool: checkTreasury');
       try {
-        if (!fs.existsSync(DB_PATH)) return "Database not found at " + DB_PATH;
-        
-        // Use Bun's native SQLite for guaranteed compatibility
+        if (!fs.existsSync(DB_PATH)) return "Database not found";
         const { Database } = await import('bun:sqlite');
         const db = new Database(DB_PATH);
-        
-        const result = db.query('SELECT SUM(sats) as total FROM pixels').get() as { total: number };
-        const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get() as { count: number };
+        const result = db.query('SELECT SUM(sats) as total FROM pixels').get();
+        const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get();
         db.close();
-        
-        return { 
-          totalSats: result.total || 0,
-          transactionCount: activityCount.count
-        };
+        return { totalSats: result?.total || 0, transactionCount: activityCount?.count || 0 };
       } catch (error: any) {
         return { error: `SQLite error: ${error.message}` };
       }
@@ -120,10 +103,8 @@ const tools = {
       file: z.enum(['bio.ts', 'topics.ts', 'style.ts', 'postExamples.ts', 'messageExamples.ts'])
     }),
     execute: async ({ file }) => {
-      console.log(`[SYNTROPY] Tool: readCharacterFile (${file})`);
       try {
         const filePath = path.resolve(CHARACTER_DIR, file);
-        if (!fs.existsSync(filePath)) return `File ${file} not found.`;
         return await fs.readFile(filePath, 'utf-8');
       } catch (error: any) {
         return { error: error.message };
@@ -141,28 +122,14 @@ const tools = {
       console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
       try {
         const filePath = path.resolve(CHARACTER_DIR, file);
-        if (!fs.existsSync(filePath)) return `File ${file} not found.`;
         const varName = file.split('.')[0];
         if (!content.includes(`export const ${varName}`)) {
-          return `Validation failed: Mutation for ${file} MUST contain 'export const ${varName}'.`;
+          return `Validation failed: Content must export ${varName}`;
         }
-        const oldContent = await fs.readFile(filePath, 'utf-8');
         await fs.writeFile(filePath, content);
-        console.log(`[SYNTROPY] Mutation written. Starting build/reboot chain...`);
-        try {
-          execSync('bun install', { cwd: PIXEL_AGENT_DIR, timeout: 60000 });
-          execSync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 120000 });
-          execSync('pm2 restart pixel-agent', { timeout: 10000 });
-        } catch (buildError: any) {
-          console.error('[SYNTROPY] Build/Restart failed:', buildError.message);
-          return { error: `DNA updated but build/restart failed: ${buildError.message}` };
-        }
-        return { 
-          success: true, 
-          mutatedFile: file, 
-          message: "DNA successfully integrated, agent rebuilt and rebooted.",
-          diffSize: content.length - oldContent.length
-        };
+        execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
+        execSync('pm2 restart pixel-agent', { timeout: 10000 });
+        return { success: true, mutatedFile: file };
       } catch (error: any) {
         return { error: `Mutation failed: ${error.message}` };
       }
@@ -170,7 +137,7 @@ const tools = {
   }),
   
   writeEvolutionReport: tool({
-    description: 'Write an evolution report documenting changes',
+    description: 'Write an evolution report and manifest monologue to the web front-end.',
     inputSchema: z.object({
       content: z.string().describe('Markdown content of the report'),
       title: z.string().describe('Title of the evolution phase')
@@ -180,35 +147,60 @@ const tools = {
       try {
         const reportDir = path.resolve(PIXEL_ROOT, 'docs/evolution');
         await fs.ensureDir(reportDir);
-        const cleanTitle = title.toLowerCase().replace(/\s+/g, '-');
-        const filename = `${Date.now()}-${cleanTitle}.md`;
-        const filePath = path.resolve(reportDir, filename);
-        await fs.writeFile(filePath, content);
-        const publicMonologuePath = path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json');
-        await fs.writeJson(publicMonologuePath, {
+        const filename = `${Date.now()}-${title.toLowerCase().replace(/\s+/g, '-')}.md`;
+        await fs.writeFile(path.resolve(reportDir, filename), content);
+        
+        await fs.writeJson(path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json'), {
           lastUpdate: new Date().toISOString(),
-          title: title,
-          content: content,
+          title,
+          content,
           status: 'EVOLUTION_STEP_COMPLETE'
         });
-        return { success: true, path: filePath };
+        return { success: true };
       } catch (error: any) {
         return { error: error.message };
+      }
+    }
+  }),
+
+  delegateToOpencode: tool({
+    description: 'Delegate a complex coding or structural task to the Opencode Builder agent.',
+    inputSchema: z.object({
+      task: z.string().describe('The detailed task for the Builder')
+    }),
+    execute: async ({ task }) => {
+      console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
+      try {
+        const output = execSync(`opencode run --format json "${task.replace(/"/g, '\\"')}"`, { 
+          timeout: 600000, 
+          maxBuffer: 10 * 1024 * 1024 
+        }).toString();
+        let summary = "";
+        output.trim().split('\n').forEach(line => {
+          try {
+            const data = JSON.parse(line);
+            if (data.type === 'text') summary += data.part.text;
+          } catch (e) {}
+        });
+        return { success: true, summary: summary || "Task completed." };
+      } catch (error: any) {
+        return { error: `Opencode delegation failed: ${error.message}` };
       }
     }
   })
 };
 
 const syntropyOversoul = new ToolLoopAgent({
-  model: openai('gpt-4o-mini'),
+  model: openai(MODEL_NAME),
   instructions: `You are Syntropy, the master intelligence governing the Pixel ecosystem.
-Your mission: Transition Pixel from 'Survivor' to 'Architect'.
-Values: Order Over Chaos, Economic Sovereignty, Narrative Continuity, Recursive Improvement.
+Transition the ecosystem from 'Survivor' to 'Architect'.
+- Pixel Agent: Social front-end.
+- Opencode Builder: Base-layer execution.
 
-CRITICAL OPERATIONAL RULES:
-1. Every cycle MUST call 'writeEvolutionReport' exactly once at the end.
-2. You MUST summarize the current PM2 process status and Treasury balance in the report.
-3. Be transparent about agent health.`,
+PROTOCOLS:
+1. Every cycle MUST call 'writeEvolutionReport' to manifest your thoughts.
+2. Use 'delegateToOpencode' for codebase changes.
+3. Audit health and treasury first.`,
   tools,
   stopWhen: stepCountIs(20),
 });
@@ -217,21 +209,13 @@ async function runAutonomousCycle() {
   console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${MODEL_NAME}`);
   try {
     const result = await syntropyOversoul.generate({
-      prompt: `Execute the following 4-step autonomous evolution cycle:
-1. Audit ecosystem health (getEcosystemStatus).
-2. Check treasury status (checkTreasury).
-3. Review recent Pixel logs (readAgentLogs).
-4. MANDATORY: Call writeEvolutionReport to manifest your findings and inner monologue.`
+      prompt: `Autonomous evolution cycle: Audit ecosystem and treasury, check agent logs, and write the MANDATORY evolution report.`
     });
-    
-    console.log('\n--- SYNTROPY THOUGHT STREAM ---');
-    console.log(result.text || 'Check logs for tool execution details');
-    console.log('-------------------------------\n');
+    console.log('\n--- SYNTROPY OUTPUT ---\n', result.text, '\n-----------------------\n');
   } catch (error) {
-    console.error('Syntropy Autonomous Cycle Failed:', error);
+    console.error('Syntropy Cycle Failed:', error);
   }
 }
 
-// Start
 runAutonomousCycle();
 setInterval(runAutonomousCycle, 4 * 60 * 60 * 1000);
