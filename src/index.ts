@@ -30,6 +30,31 @@ const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
 const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 const DB_PATH = path.resolve(PIXEL_ROOT, 'lnpixels/api/pixels.db');
 const LOG_PATH = '/home/pixel/.pm2/logs/pixel-agent-out-2.log';
+const AUDIT_LOG_PATH = path.resolve(PIXEL_ROOT, 'pixel-landing/public/audit.json');
+
+const logAudit = async (entry: any) => {
+  try {
+    let auditLog = [];
+    if (fs.existsSync(AUDIT_LOG_PATH)) {
+      const content = await fs.readFile(AUDIT_LOG_PATH, 'utf-8');
+      auditLog = JSON.parse(content);
+    }
+    
+    const newEntry = {
+      timestamp: new Date().toISOString(),
+      ...entry
+    };
+    
+    auditLog.unshift(newEntry);
+    // Keep last 100 entries
+    if (auditLog.length > 100) auditLog = auditLog.slice(0, 100);
+    
+    await fs.writeJson(AUDIT_LOG_PATH, auditLog, { spaces: 2 });
+    console.log(`[SYNTROPY] Audit log updated: ${newEntry.type}`);
+  } catch (error: any) {
+    console.error('[SYNTROPY] Failed to write audit log:', error.message);
+  }
+};
 
 const syncAll = () => {
   console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
@@ -154,22 +179,28 @@ const tools = {
     }),
     execute: async ({ file, content }) => {
       console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
+      await logAudit({ type: 'mutation_start', file });
       try {
         const filePath = path.resolve(CHARACTER_DIR, file);
         const varName = file.split('.')[0];
         if (!content.includes(`export const ${varName}`)) {
-          return `Validation failed: Content must export ${varName}`;
+          const error = `Validation failed: Content must export ${varName}`;
+          await logAudit({ type: 'mutation_error', file, error });
+          return { error };
         }
         await fs.writeFile(filePath, content);
         try {
           execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
           execSync('pm2 restart pixel-agent', { timeout: 10000 });
           syncAll(); // Sync changes to GitHub after build/reboot
+          await logAudit({ type: 'mutation_success', file });
         } catch (buildError: any) {
+          await logAudit({ type: 'mutation_error', file, error: buildError.message });
           return { error: `DNA updated but build/restart failed: ${buildError.message}` };
         }
         return { success: true, mutatedFile: file };
       } catch (error: any) {
+        await logAudit({ type: 'mutation_error', file, error: error.message });
         return { error: `Mutation failed: ${error.message}` };
       }
     }
@@ -183,6 +214,7 @@ const tools = {
     }),
     execute: async ({ content, title }) => {
       console.log(`[SYNTROPY] Tool: writeEvolutionReport (${title})`);
+      await logAudit({ type: 'evolution_report', title });
       try {
         const reportDir = path.resolve(PIXEL_ROOT, 'docs/evolution');
         await fs.ensureDir(reportDir);
@@ -197,6 +229,7 @@ const tools = {
         });
         return { success: true };
       } catch (error: any) {
+        await logAudit({ type: 'report_error', title, error: error.message });
         return { error: error.message };
       }
     }
@@ -209,6 +242,7 @@ const tools = {
     }),
     execute: async ({ task }) => {
       console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
+      await logAudit({ type: 'opencode_delegation_start', task });
       try {
         const output = execSync(`opencode run --format json "${task.replace(/"/g, '\\"')}"`, { 
           timeout: 600000, 
@@ -222,8 +256,10 @@ const tools = {
           } catch (e) {}
         });
         syncAll(); // Sync changes to GitHub after builder execution
+        await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 1000) });
         return { success: true, summary: summary || "Task completed." };
       } catch (error: any) {
+        await logAudit({ type: 'opencode_delegation_error', task, error: error.message });
         return { error: `Opencode delegation failed: ${error.message}` };
       }
     }
@@ -247,13 +283,25 @@ PROTOCOLS:
 
 async function runAutonomousCycle() {
   console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${MODEL_NAME}`);
+  await logAudit({ type: 'cycle_start', model: MODEL_NAME });
   try {
     const result = await syntropyOversoul.generate({
       prompt: `Autonomous evolution cycle: Audit ecosystem and treasury, check agent logs, and write the MANDATORY evolution report.`
     });
+    
+    // Log the entire cycle's steps for full transparency
+    await logAudit({ 
+      type: 'cycle_complete', 
+      steps: result.steps.map(s => ({
+        toolCalls: s.toolCalls?.map(tc => ({ name: tc.toolName, args: tc.args })),
+        text: s.text
+      }))
+    });
+
     console.log('\n--- SYNTROPY OUTPUT ---\n', result.text, '\n-----------------------\n');
-  } catch (error) {
+  } catch (error: any) {
     console.error('Syntropy Cycle Failed:', error);
+    await logAudit({ type: 'cycle_error', error: error.message });
   }
 }
 
