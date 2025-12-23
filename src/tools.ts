@@ -167,9 +167,9 @@ export const tools = {
   }),
 
   delegateToOpencode: tool({
-    description: 'Delegate a SPECIFIC and SHORT coding task to the Opencode Builder agent. ONLY for tasks with a clear technical definition and high success probability.',
+    description: 'Delegate a SPECIFIC technical task to the Opencode Builder. Useful for: 1. Deep coding/refactoring, 2. Web searching for latest info/docs, 3. Server admin & DevOps tasks (sudo access). Instructions MUST be clear, specific, and to the point.',
     inputSchema: z.object({
-      task: z.string().describe('The exact technical task for the Builder (e.g. "Fix syntax error in src/index.ts", "Add field Y to the settings interface"). MUST NOT be vague or ambiguous.')
+      task: z.string().describe('The detailed, specific technical instruction (e.g. "Search for latest AI SDK 6.2 release notes", "Check Nginx logs for 502 errors and fix them", "Optimise SQLite indexes in pixels.db").')
     }),
     execute: async ({ task }) => {
       console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
