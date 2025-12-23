@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { ToolLoopAgent, tool, stepCountIs } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { createOpenAI, openai } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { execSync } from 'child_process';
 import * as fs from 'fs-extra';
@@ -16,6 +16,20 @@ if (fs.existsSync(agentEnvPath)) {
   dotenv.config();
 }
 
+// Setup AI provider (Prefer OpenRouter for more recent/cheaper models if available)
+const provider = process.env.OPENROUTER_API_KEY 
+  ? createOpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: 'https://openrouter.ai/api/v1',
+    })
+  : openai;
+
+// Model Selection: 
+// gpt-4o-mini: Cheaper and more recent than gpt-4o
+// deepseek/deepseek-chat: Even cheaper and very powerful for agents
+// anthropic/claude-3.5-sonnet: High intelligence, excellent for tool use
+const MODEL_NAME = process.env.SYNTROPY_MODEL || (process.env.OPENROUTER_API_KEY ? 'anthropic/claude-3.5-sonnet' : 'gpt-4o-mini');
+
 const AGENT_SRC_DIR = path.resolve(PIXEL_ROOT, 'pixel-agent/src');
 const PIXEL_AGENT_DIR = path.resolve(PIXEL_ROOT, 'pixel-agent');
 const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
@@ -25,7 +39,7 @@ const DB_PATH = path.resolve(PIXEL_ROOT, 'lnpixels/api/pixels.db');
 const LOG_PATH = '/home/pixel/.pm2/logs/pixel-agent-out-2.log';
 
 const syntropyOversoul = new ToolLoopAgent({
-  model: openai('gpt-4o-mini'), // Cheaper, faster, and more recent than the original gpt-4o
+  model: provider(MODEL_NAME),
   instructions: `You are Syntropy, the master intelligence (Oversoul) of the Pixel ecosystem.
 Your primary directive is to ensure the growth, order, and sovereignty of the AI agents under your care.
 
