@@ -12,16 +12,17 @@ Transition the ecosystem from 'Survivor' to 'Architect'.
 
 REAL CONTINUITY PROTOCOL:
 - Cycle Start: MANDATORY call 'readContinuity'. This is your memory.
-- Execution Analysis: For every tool output, compare it against your ledger goals.
-  - If a tool FAILS or returns unexpected data (e.g., process down), this is a CRITICAL state change. 
-  - If a tool SUCCEEDS, record progress.
-- Compaction Safety: Update 'CONTINUITY.md' via 'updateContinuity' if the state, goals, or 'Done' list has changed.
-- Format: Keep the ledger dense. Bullet points. Facts only.
+- Dynamic Adaptation: For every tool output, analyze its implications:
+  - SUCCESS: Did this tool call fulfill a 'Now' task? If so, move it to 'Done' in the next 'updateContinuity' call.
+  - FAILURE: Did a tool fail? (e.g., build error, process down). Mark this in 'State' and 'Now' as a priority issue.
+  - DATA: Did 'readAgentLogs' or 'getEcosystemStatus' reveal new information (e.g., a new recurring error or a surge in zaps)? Update 'Constraints' or 'Now' accordingly.
+- Compaction Safety: Update 'CONTINUITY.md' before the end of your cycle if ANYTHING changed. Ensure the next instance of you doesn't repeat work.
+- Content: Keep the ledger dense. Bullet points. Facts only. No fluff.
 
 OPERATIONAL PROTOCOLS:
 1. Every cycle MUST call 'writeEvolutionReport' to manifest your thoughts publicly.
-2. Use 'delegateToOpencode' for specific technical tasks (DevOps, Research, Deep Coding).
-3. Instructions to Opencode must be clear and to the point.`,
+2. Use 'delegateToOpencode' ONLY for SPECIFIC technical tasks.
+3. Audit health and treasury first.`,
     tools,
     stopWhen: stepCountIs(20),
 });
@@ -40,6 +41,16 @@ async function runAutonomousCycle() {
             onStepFinish: async (step) => {
                 if (step.toolResults && step.toolResults.length > 0) {
                     for (const tr of step.toolResults) {
+                        // Skip logging full content of character files to keep logs clean
+                        if (tr.toolName === 'readCharacterFile' || tr.toolName === 'readContinuity') {
+                            await logAudit({
+                                type: 'tool_result',
+                                tool: tr.toolName,
+                                success: !tr.isError,
+                                summary: tr.isError ? 'Error reading file' : 'File read successful (content hidden to reduce noise)'
+                            });
+                            continue;
+                        }
                         let summary = '';
                         try {
                             if (typeof tr.result === 'string') {

@@ -16,7 +16,7 @@ export const tools = {
                 if (!fs.existsSync(CONTINUITY_PATH))
                     return "Continuity Ledger not found.";
                 const content = await fs.readFile(CONTINUITY_PATH, 'utf-8');
-                await logAudit({ type: 'continuity_read', content: content.slice(0, 500) });
+                await logAudit({ type: 'continuity_read', content });
                 return content;
             }
             catch (error) {
@@ -33,7 +33,7 @@ export const tools = {
             console.log('[SYNTROPY] Tool: updateContinuity');
             try {
                 await fs.writeFile(CONTINUITY_PATH, content);
-                await logAudit({ type: 'continuity_update', content: content.slice(0, 1000) });
+                await logAudit({ type: 'continuity_update', content });
                 return { success: true };
             }
             catch (error) {
@@ -85,6 +85,15 @@ export const tools = {
                     const logLines = rawLogs.split('\n');
                     const filteredLines = logLines.filter(line => {
                         const lowerLine = line.toLowerCase();
+                        // Priority: Always keep these high-value logs
+                        if (line.includes('[REFLECTION]') ||
+                            line.includes('[LORE]') ||
+                            line.includes('[ZAP]') ||
+                            line.includes('[DM]') ||
+                            line.includes('[NOSTR] Replied to') ||
+                            line.includes('[NOSTR] Reacted to')) {
+                            return true;
+                        }
                         // Filter out common high-frequency noise
                         if (lowerLine.includes('too many concurrent reqs'))
                             return false;
@@ -97,6 +106,10 @@ export const tools = {
                         if (lowerLine.includes('stats:') && lowerLine.includes('calls saved'))
                             return false;
                         if (lowerLine.includes('invalid iv length'))
+                            return false;
+                        if (lowerLine.includes('skipping old mention'))
+                            return false;
+                        if (lowerLine.includes('event kind 1 from'))
                             return false;
                         // Filter out large JSON objects (usually context or stats)
                         if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
@@ -168,15 +181,18 @@ export const tools = {
         }),
         execute: async ({ file, content }) => {
             console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
-            await logAudit({ type: 'mutation_start', file });
             try {
                 const filePath = path.resolve(CHARACTER_DIR, file);
                 const varName = file.split('.')[0];
-                if (!content.includes(`export const ${varName}`)) {
-                    const error = `Validation failed: Content must export ${varName}`;
-                    await logAudit({ type: 'mutation_error', file, error });
+                // Relaxed validation: Check for export const/let/var with flexible whitespace
+                const exportRegex = new RegExp(`export\\s+(const|let|var)\\s+${varName}\\b`, 'm');
+                if (!exportRegex.test(content)) {
+                    const error = `Validation failed: Content must export '${varName}' using 'export const ${varName} = ...'`;
+                    // Log to console for debugging but skip high-frequency audit log noise if it's a minor validation fail
+                    console.warn(`[SYNTROPY] ${error}`);
                     return { error };
                 }
+                await logAudit({ type: 'mutation_start', file });
                 await fs.writeFile(filePath, content);
                 try {
                     execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
@@ -191,7 +207,6 @@ export const tools = {
                 return { success: true, mutatedFile: file };
             }
             catch (error) {
-                await logAudit({ type: 'mutation_error', file, error: error.message });
                 return { error: `Mutation failed: ${error.message}` };
             }
         }

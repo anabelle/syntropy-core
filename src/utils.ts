@@ -22,8 +22,8 @@ export const logAudit = async (entry: any) => {
     };
     
     auditLog.unshift(newEntry);
-    // Keep last 200 entries for better history
-    if (auditLog.length > 200) auditLog = auditLog.slice(0, 200);
+    // Keep last 300 entries for better history
+    if (auditLog.length > 300) auditLog = auditLog.slice(0, 300);
     
     await fs.writeJson(AUDIT_LOG_PATH, auditLog, { spaces: 2 });
     console.log(`[SYNTROPY] Audit log updated: ${newEntry.type}`);
