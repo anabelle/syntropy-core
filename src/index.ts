@@ -31,6 +31,40 @@ const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 const DB_PATH = path.resolve(PIXEL_ROOT, 'lnpixels/api/pixels.db');
 const LOG_PATH = '/home/pixel/.pm2/logs/pixel-agent-out-2.log';
 
+const syncAll = () => {
+  console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
+  try {
+    const repos = [
+      PIXEL_ROOT,
+      path.resolve(PIXEL_ROOT, 'lnpixels'),
+      path.resolve(PIXEL_ROOT, 'pixel-agent'),
+      path.resolve(PIXEL_ROOT, 'pixel-landing'),
+      path.resolve(PIXEL_ROOT, 'syntropy-core')
+    ];
+
+    for (const repo of repos) {
+      try {
+        execSync('git add .', { cwd: repo });
+        execSync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo });
+        const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim();
+        execSync(`git push origin ${branch}`, { cwd: repo });
+      } catch (e) {
+        // Ignore if no changes to commit
+      }
+    }
+
+    // Sync parent with submodule updates
+    execSync('git add .', { cwd: PIXEL_ROOT });
+    execSync('git commit -m "chore: aggregate autonomous sync"', { cwd: PIXEL_ROOT });
+    execSync('git push origin master', { cwd: PIXEL_ROOT });
+    console.log('[SYNTROPY] Sync complete.');
+    return true;
+  } catch (error: any) {
+    console.error('[SYNTROPY] Sync failed:', error.message);
+    return false;
+  }
+};
+
 const tools = {
   getEcosystemStatus: tool({
     description: 'Get status of all processes in the ecosystem via PM2',
@@ -127,8 +161,13 @@ const tools = {
           return `Validation failed: Content must export ${varName}`;
         }
         await fs.writeFile(filePath, content);
-        execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-        execSync('pm2 restart pixel-agent', { timeout: 10000 });
+        try {
+          execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
+          execSync('pm2 restart pixel-agent', { timeout: 10000 });
+          syncAll(); // Sync changes to GitHub after build/reboot
+        } catch (buildError: any) {
+          return { error: `DNA updated but build/restart failed: ${buildError.message}` };
+        }
         return { success: true, mutatedFile: file };
       } catch (error: any) {
         return { error: `Mutation failed: ${error.message}` };
@@ -182,6 +221,7 @@ const tools = {
             if (data.type === 'text') summary += data.part.text;
           } catch (e) {}
         });
+        syncAll(); // Sync changes to GitHub after builder execution
         return { success: true, summary: summary || "Task completed." };
       } catch (error: any) {
         return { error: `Opencode delegation failed: ${error.message}` };
