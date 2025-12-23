@@ -1,7 +1,10 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { PIXEL_ROOT, AUDIT_LOG_PATH } from './config';
+
+const execAsync = promisify(exec);
 
 export const logAudit = async (entry: any) => {
   try {
@@ -20,7 +23,7 @@ export const logAudit = async (entry: any) => {
   }
 };
 
-export const syncAll = () => {
+export const syncAll = async () => {
   console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
   try {
     const repos = [
@@ -37,16 +40,16 @@ export const syncAll = () => {
         // Check if it is a git repo
         if (!fs.existsSync(path.join(repo, '.git'))) continue;
 
-        execSync('git add .', { cwd: repo, stdio: 'ignore' });
+        await execAsync('git add .', { cwd: repo });
         try {
-            execSync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo, stdio: 'ignore' });
+            await execAsync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo });
         } catch (e) {
             // Ignore if no changes to commit
         }
         
         try {
-             const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim();
-             execSync(`git push origin ${branch}`, { cwd: repo, stdio: 'ignore' });
+             const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
+             await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
         } catch (e) {
              // Push might fail if no upstream or auth issues, catch silently to not break loop
         }

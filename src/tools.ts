@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { 
@@ -12,6 +13,7 @@ import {
 } from './config';
 import { logAudit, syncAll } from './utils';
 
+const execAsync = promisify(exec);
 const CONTINUITY_PATH = path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
 
 export const tools = {
@@ -56,11 +58,12 @@ export const tools = {
     execute: async () => {
       console.log('[SYNTROPY] Tool: getEcosystemStatus');
       try {
-        const rawOutput = execSync('pm2 jlist', { timeout: 10000 }).toString().trim();
-        const startIndex = rawOutput.indexOf('[');
-        const endIndex = rawOutput.lastIndexOf(']');
+        const { stdout: rawOutput } = await execAsync('pm2 jlist', { timeout: 10000 });
+        const outputStr = rawOutput.toString().trim();
+        const startIndex = outputStr.indexOf('[');
+        const endIndex = outputStr.lastIndexOf(']');
         if (startIndex === -1 || endIndex === -1) return { error: "No JSON found" };
-        const processes = JSON.parse(rawOutput.substring(startIndex, endIndex + 1));
+        const processes = JSON.parse(outputStr.substring(startIndex, endIndex + 1));
         const status = processes.map((p: any) => ({
           name: p.name,
           status: p.pm2_env?.status || 'unknown',
@@ -87,8 +90,8 @@ export const tools = {
       try {
         if (fs.existsSync(LOG_PATH)) {
           // Read 5x more lines than requested to have enough data after filtering
-          const rawLogs = execSync(`tail -n ${lines * 5} ${LOG_PATH}`, { timeout: 10000 }).toString();
-          const logLines = rawLogs.split('\n');
+          const { stdout: rawLogs } = await execAsync(`tail -n ${lines * 5} ${LOG_PATH}`, { timeout: 10000 });
+          const logLines = rawLogs.toString().split('\n');
           
           const filteredLines = logLines.filter(line => {
             const lowerLine = line.toLowerCase();
@@ -160,20 +163,22 @@ export const tools = {
     }),
     execute: async () => {
       console.log('[SYNTROPY] Tool: checkTreasury');
+      let db;
       try {
         if (!fs.existsSync(DB_PATH)) return "Database not found";
         // @ts-ignore
         const { Database } = await import('bun:sqlite');
-        const db = new Database(DB_PATH);
+        db = new Database(DB_PATH);
         const result = db.query('SELECT SUM(sats) as total FROM pixels').get() as any;
         const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get() as any;
-        db.close();
         const data = { totalSats: result?.total || 0, transactionCount: activityCount?.count || 0 };
         await logAudit({ type: 'treasury_check', ...data });
         return data;
       } catch (error: any) {
         await logAudit({ type: 'treasury_error', error: error.message });
         return { error: `SQLite error: ${error.message}` };
+      } finally {
+        if (db) db.close();
       }
     }
   }),
@@ -217,9 +222,9 @@ export const tools = {
         await logAudit({ type: 'mutation_start', file });
         await fs.writeFile(filePath, content);
         try {
-          execSync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-          execSync('pm2 restart pixel-agent', { timeout: 10000 });
-          syncAll(); // Sync changes to GitHub after build/reboot
+          await execAsync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
+          await execAsync('pm2 restart pixel-agent', { timeout: 10000 });
+          await syncAll(); // Sync changes to GitHub after build/reboot
           await logAudit({ type: 'mutation_success', file });
         } catch (buildError: any) {
           await logAudit({ type: 'mutation_error', file, error: buildError.message });
@@ -270,18 +275,18 @@ export const tools = {
       console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
       await logAudit({ type: 'opencode_delegation_start', task });
       try {
-        const output = execSync(`opencode run --format json ${task}`, { 
+        const { stdout: output } = await execAsync(`opencode run --format json ${task}`, { 
           timeout: 6000000, 
           maxBuffer: 100 * 1024 * 1024 
-        }).toString();
+        });
         let summary = "";
-        output.trim().split('\n').forEach(line => {
+        output.toString().trim().split('\n').forEach(line => {
           try {
             const data = JSON.parse(line);
             if (data.type === 'text') summary += data.part.text;
           } catch (e) {}
         });
-        syncAll(); // Sync changes to GitHub after builder execution
+        await syncAll(); // Sync changes to GitHub after builder execution
         await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 1000) });
         return { success: true, summary: summary || "Task completed." };
       } catch (error: any) {
