@@ -1,0 +1,29 @@
+{
+  "name": "syntropy-core",
+  "version": "0.1.0",
+  "description": "The Syntropy Oversoul - Recursive AI Orchestrator",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "tsc",
+    "lint": "eslint src/**"
+  },
+  "dependencies": {
+    "ai": "^6.0.1",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "zod": "^3.24.2",
+    "dotenv": "^16.4.7",
+    "pm2": "^5.3.0",
+    "better-sqlite3": "^11.5.0",
+    "fs-extra": "^11.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/node": "^20.17.10",
+    "@types/fs-extra": "^11.0.4",
+    "@types/better-sqlite3": "*"
+  }
+}
