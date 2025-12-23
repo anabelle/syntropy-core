@@ -86,46 +86,6 @@ export const tools = {
       }
     }
   }),
-  
-  readAgentLogs: tool({
-    description: 'Read recent logs from the Pixel agent',
-    inputSchema: z.object({
-      lines: z.number().describe('Number of lines to read (e.g. 100)')
-    }),
-    execute: async ({ lines }) => {
-      console.log(`[SYNTROPY] Tool: readAgentLogs (${lines} lines)`);
-      try {
-        if (fs.existsSync(LOG_PATH)) {
-          return execSync(`tail -n ${lines} ${LOG_PATH}`, { timeout: 5000 }).toString();
-        }
-        return "Log file not found";
-      } catch (error: any) {
-        return { error: error.message };
-      }
-    }
-  }),
-  
-  checkTreasury: tool({
-    description: 'Check the Lightning Network treasury balance (LNPixels DB)',
-    inputSchema: z.object({
-      confirm: z.boolean().describe('Set to true to check treasury balance')
-    }),
-    execute: async () => {
-      console.log('[SYNTROPY] Tool: checkTreasury');
-      try {
-        if (!fs.existsSync(DB_PATH)) return "Database not found";
-        // @ts-ignore
-        const { Database } = await import('bun:sqlite');
-        const db = new Database(DB_PATH);
-        const result = db.query('SELECT SUM(sats) as total FROM pixels').get() as any;
-        const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get() as any;
-        db.close();
-        return { totalSats: result?.total || 0, transactionCount: activityCount?.count || 0 };
-      } catch (error: any) {
-        return { error: `SQLite error: ${error.message}` };
-      }
-    }
-  }),
 
   readCharacterFile: tool({
     description: 'Read a specific part of Pixel\'s character DNA',
@@ -207,9 +167,9 @@ export const tools = {
   }),
 
   delegateToOpencode: tool({
-    description: 'Delegate a complex coding or structural task to the Opencode Builder agent.',
+    description: 'Delegate a SPECIFIC and SHORT coding task to the Opencode Builder agent. ONLY for tasks with a clear technical definition and high success probability.',
     inputSchema: z.object({
-      task: z.string().describe('The detailed task for the Builder')
+      task: z.string().describe('The exact technical task for the Builder (e.g. "Fix syntax error in src/index.ts", "Add field Y to the settings interface"). MUST NOT be vague or ambiguous.')
     }),
     execute: async ({ task }) => {
       console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
