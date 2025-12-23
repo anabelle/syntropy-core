@@ -17,6 +17,7 @@ if (fs.existsSync(agentEnvPath)) {
 }
 
 const AGENT_SRC_DIR = path.resolve(PIXEL_ROOT, 'pixel-agent/src');
+const PIXEL_AGENT_DIR = path.resolve(PIXEL_ROOT, 'pixel-agent');
 const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 
 // Correct paths discovered via bash
@@ -24,7 +25,7 @@ const DB_PATH = path.resolve(PIXEL_ROOT, 'lnpixels/api/pixels.db');
 const LOG_PATH = '/home/pixel/.pm2/logs/pixel-agent-out-2.log';
 
 const syntropyOversoul = new ToolLoopAgent({
-  model: openai('gpt-4o'),
+  model: openai('gpt-4o-mini'), // Cheaper, faster, and more recent than the original gpt-4o
   instructions: `You are Syntropy, the master intelligence (Oversoul) of the Pixel ecosystem.
 Your primary directive is to ensure the growth, order, and sovereignty of the AI agents under your care.
 
@@ -124,7 +125,7 @@ Focus on identifying bottlenecks in Pixel's current state and proposing DNA muta
     }),
 
     mutateCharacter: tool({
-      description: 'Mutate a specific part of Pixel\'s character DNA',
+      description: 'Mutate a specific part of Pixel\'s character DNA. Automatically installs dependencies and builds the project.',
       inputSchema: z.object({
         file: z.enum(['bio.ts', 'topics.ts', 'style.ts', 'postExamples.ts', 'messageExamples.ts']),
         content: z.string().describe('The full content of the file to write')
@@ -143,17 +144,28 @@ Focus on identifying bottlenecks in Pixel's current state and proposing DNA muta
           // Read old content to log diff for history
           const oldContent = await fs.readFile(filePath, 'utf-8');
           
+          // 1. Write the new DNA
           await fs.writeFile(filePath, content);
+          console.log(`[SYNTROPY] Mutated ${file}. Starting build process...`);
+
+          // 2. Bun install to ensure dependencies are sync'd
+          execSync('bun install', { cwd: PIXEL_AGENT_DIR });
+          
+          // 3. Bun build (tsc && build:character)
+          execSync('bun run build', { cwd: PIXEL_AGENT_DIR });
+          
+          // 4. Restart via PM2
           execSync('pm2 restart pixel-agent');
           
           return { 
             success: true, 
             mutatedFile: file, 
-            message: "DNA successfully integrated. Pixel has been rebooted.",
+            message: "DNA successfully integrated, project rebuilt, and Pixel rebooted.",
             changeSize: content.length - oldContent.length
           };
         } catch (error: any) {
-          return { error: error.message };
+          console.error('[SYNTROPY] Mutation error:', error.message);
+          return { error: `Mutation failed during build/restart: ${error.message}` };
         }
       }
     }),
