@@ -15,10 +15,10 @@ REAL CONTINUITY PROTOCOL:
 - Cycle Start: MANDATORY call 'readContinuity'. This is your memory.
 - Dynamic Adaptation: For every tool output, analyze its implications:
   - SUCCESS: Did this tool call fulfill a 'Now' task? If so, move it to 'Done' in the next 'updateContinuity' call.
-  - FAILURE: Did a tool fail? (e.g., build error, process down). Mark this in 'State' and 'Now' as a priority issue.
-  - DATA: Did 'readAgentLogs' or 'getEcosystemStatus' reveal new information (e.g., a new recurring error or a surge in zaps)? Update 'Constraints' or 'Now' accordingly.
-- Compaction Safety: Update 'CONTINUITY.md' before the end of your cycle if ANYTHING changed. Ensure the next instance of you doesn't repeat work.
-- Content: Keep the ledger dense. Bullet points. Facts only. No fluff.
+  - LEARNINGS: Use # Knowledge Base in CONTINUITY.md to store long-term technical facts, audit results, or environment insights discovered via tools (especially from 'delegateToOpencode').
+  - FAILURE: Did a tool fail? Mark this in 'State' and 'Now' as a priority issue.
+- Compaction Safety: Update 'CONTINUITY.md' before the end of your cycle if ANYTHING changed.
+- Content: Keep the ledger dense. Bullet points. Facts only. No fluff. Use # Knowledge Base for persistence.
 
 OPERATIONAL PROTOCOLS:
 1. Every cycle MUST call 'writeEvolutionReport' to manifest your thoughts publicly.
@@ -33,64 +33,72 @@ async function runAutonomousCycle() {
   await logAudit({ type: 'cycle_start', model: MODEL_NAME });
   try {
     const result = await syntropyOversoul.generate({
-      prompt: `Autonomous evolution cycle:
-1. Read Continuity Ledger.
-2. Audit ecosystem health and treasury.
-3. Check agent logs.
-4. If any issues are found or progress is made, update the Continuity Ledger.
-5. Write the MANDATORY evolution report summarizing this cycle.`,
+      prompt: `Execute a full autonomous evolution cycle:
+1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
+2. Audit ecosystem health, treasury, and filtered agent logs.
+3. PROACTIVE ARCHITECTURE: If you detect recurring technical issues in logs or if the ledger has 'Perform deep codebase audit' in 'Next', use 'delegateToOpencode' to perform a SPECIFIC technical audit or fix.
+4. KNOWLEDGE RETENTION: Record all technical findings, Opencode audit results, and environment facts in the # Knowledge Base section of 'CONTINUITY.md' via 'updateContinuity'.
+5. Manifest your findings and current Oversoul state via 'writeEvolutionReport'.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
       onStepFinish: async (step: any) => {
-        if (step.toolResults && step.toolResults.length > 0) {
-          for (const tr of step.toolResults) {
-            // Skip logging full content of character files to keep logs clean
-            if (tr.toolName === 'readCharacterFile' || tr.toolName === 'readContinuity') {
+        try {
+          if (step.toolResults && step.toolResults.length > 0) {
+            for (const tr of step.toolResults) {
+              // Skip logging full content of character files to keep logs clean
+              if (tr.toolName === 'readCharacterFile' || tr.toolName === 'readContinuity') {
+                await logAudit({
+                  type: 'tool_result',
+                  tool: tr.toolName,
+                  success: !tr.isError,
+                  summary: tr.isError ? 'Error reading file' : 'File read successful (content hidden to reduce noise)'
+                });
+                continue;
+              }
+
+              let summary = '';
+              try {
+                const rawResult = tr.result || tr.output;
+                if (typeof rawResult === 'string') {
+                  summary = rawResult.slice(0, 500);
+                } else if (rawResult !== undefined && rawResult !== null) {
+                  summary = JSON.stringify(rawResult).slice(0, 500);
+                } else {
+                  summary = 'No result returned';
+                }
+              } catch (e) {
+                summary = 'Error stringifying result';
+              }
+
               await logAudit({
                 type: 'tool_result',
                 tool: tr.toolName,
                 success: !tr.isError,
-                summary: tr.isError ? 'Error reading file' : 'File read successful (content hidden to reduce noise)'
+                summary
               });
-              continue;
             }
-
-            let summary = '';
-            try {
-              if (typeof tr.result === 'string') {
-                summary = tr.result.slice(0, 500);
-              } else if (tr.result !== undefined && tr.result !== null) {
-                summary = JSON.stringify(tr.result).slice(0, 500);
-              } else if (tr.output !== undefined && tr.output !== null) {
-                summary = typeof tr.output === 'string' ? tr.output.slice(0, 500) : JSON.stringify(tr.output).slice(0, 500);
-              } else {
-                summary = 'No result returned';
-              }
-            } catch (e) {
-              summary = 'Error stringifying result';
-            }
-
-            await logAudit({
-              type: 'tool_result',
-              tool: tr.toolName,
-              success: !tr.isError,
-              summary
-            });
           }
+        } catch (stepErr) {
+          console.error('[SYNTROPY] Error in onStepFinish:', stepErr);
         }
       }
     });
     
     // Log the entire cycle's steps for full transparency
-    await logAudit({ 
-      type: 'cycle_complete', 
-      steps: result.steps.map(s => ({
-        toolCalls: s.toolCalls?.map((tc: any) => ({ 
-          name: tc.toolName, 
-          args: tc.args || tc.input 
-        })),
-        text: s.text
-      }))
-    });
+    try {
+      await logAudit({ 
+        type: 'cycle_complete', 
+        steps: result.steps.map(s => ({
+          toolCalls: s.toolCalls?.map((tc: any) => ({ 
+            name: tc.toolName, 
+            // @ts-ignore
+            args: tc.args || tc.input 
+          })),
+          text: s.text
+        }))
+      });
+    } catch (auditErr) {
+       console.error('[SYNTROPY] Error logging cycle_complete:', auditErr);
+    }
 
     console.log('\n--- SYNTROPY OUTPUT ---\n', result.text, '\n-----------------------\n');
   } catch (error: any) {
