@@ -249,8 +249,8 @@ export const tools = {
             await logAudit({ type: 'opencode_delegation_start', task });
             try {
                 const output = execSync(`opencode run --format json "${task.replace(/"/g, '\\"')}"`, {
-                    timeout: 600000,
-                    maxBuffer: 10 * 1024 * 1024
+                    timeout: 6000000,
+                    maxBuffer: 100 * 1024 * 1024
                 }).toString();
                 let summary = "";
                 output.trim().split('\n').forEach(line => {
