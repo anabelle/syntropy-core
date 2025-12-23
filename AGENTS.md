@@ -4,6 +4,7 @@ All agents operating within the Syntropy ecosystem MUST adhere to these rules.
 
 ## Reference Documentation
 - **Core SDK**: Refer to `/home/pixel/pixel/docs/AI_SDK_6_DOCS.md` for AI SDK 6 implementation details.
+- **OpenCode Spec**: Refer to `/home/pixel/pixel/docs/OPENCODE_SPEC.md` for Opencode operational protocols.
 - **Vision**: Refer to `/home/pixel/pixel/syntropy-core/VISION.md` for the Oversoul directives.
 
 ## Rules of Engagement
