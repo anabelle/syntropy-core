@@ -9,8 +9,9 @@ All agents operating within the Syntropy ecosystem MUST adhere to these rules.
 
 ## Rules of Engagement
 1. **Implementation Standard**: Use `ToolLoopAgent` from `ai` SDK 6.
-2. **Model Choice**: Use `google/gemini-3-flash-preview` via OpenRouter as the primary intelligence.
-3. **Recursive Build Protocol**: When mutating code, agents MUST execute `bun install` and `bun run build` before restarting services.
+2. **Model Choice**: Use `google/gemini-3-flash-preview` via OpenRouter (or `gpt-4o-mini` for stable loops) as the primary intelligence.
+3. **Continuity Protocol**: Maintain the `CONTINUITY.md` ledger. Read at cycle start, update on state change.
+4. **Recursive Build Protocol**: When mutating code, agents MUST execute `bun install` and `bun run build` before restarting services.
 4. **Execution Safety**: Always include `timeout` parameters for bash tool calls. 
    - Status checks: 5000-10000ms.
    - Builds/Installs: 60000-120000ms.

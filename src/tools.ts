@@ -12,7 +12,42 @@ import {
 } from './config';
 import { logAudit, syncAll } from './utils';
 
+const CONTINUITY_PATH = path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
+
 export const tools = {
+  readContinuity: tool({
+    description: 'Read the Continuity Ledger. This is the canonical session briefing designed to survive context compaction.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      console.log('[SYNTROPY] Tool: readContinuity');
+      try {
+        if (!fs.existsSync(CONTINUITY_PATH)) return "Continuity Ledger not found.";
+        const content = await fs.readFile(CONTINUITY_PATH, 'utf-8');
+        await logAudit({ type: 'continuity_read', content: content.slice(0, 500) });
+        return content;
+      } catch (error: any) {
+        return { error: error.message };
+      }
+    }
+  }),
+
+  updateContinuity: tool({
+    description: 'Update the Continuity Ledger. Use this whenever the goal, constraints, key decisions, or progress state change.',
+    inputSchema: z.object({
+      content: z.string().describe('The full updated content of CONTINUITY.md. Maintain the standard headings.')
+    }),
+    execute: async ({ content }) => {
+      console.log('[SYNTROPY] Tool: updateContinuity');
+      try {
+        await fs.writeFile(CONTINUITY_PATH, content);
+        await logAudit({ type: 'continuity_update', content: content.slice(0, 1000) });
+        return { success: true };
+      } catch (error: any) {
+        return { error: error.message };
+      }
+    }
+  }),
+
   getEcosystemStatus: tool({
     description: 'Get status of all processes in the ecosystem via PM2',
     inputSchema: z.object({
@@ -43,7 +78,7 @@ export const tools = {
   }),
   
   readAgentLogs: tool({
-    description: 'Read recent logs from the Pixel agent',
+    description: 'Read recent logs from the Pixel agent. Automatically filters noise for Syntropy intelligence.',
     inputSchema: z.object({
       lines: z.number().describe('Number of lines to read (e.g. 100)')
     }),
@@ -51,9 +86,34 @@ export const tools = {
       console.log(`[SYNTROPY] Tool: readAgentLogs (${lines} lines)`);
       try {
         if (fs.existsSync(LOG_PATH)) {
-          const logs = execSync(`tail -n ${lines} ${LOG_PATH}`, { timeout: 5000 }).toString();
-          await logAudit({ type: 'logs_read', lines });
-          return logs;
+          // Read 5x more lines than requested to have enough data after filtering
+          const rawLogs = execSync(`tail -n ${lines * 5} ${LOG_PATH}`, { timeout: 10000 }).toString();
+          const logLines = rawLogs.split('\n');
+          
+          const filteredLines = logLines.filter(line => {
+            const lowerLine = line.toLowerCase();
+            // Filter out common high-frequency noise
+            if (lowerLine.includes('too many concurrent reqs')) return false;
+            if (lowerLine.includes('drizzleadapter creatememory')) return false;
+            if (lowerLine.includes('creating memory id=')) return false;
+            if (lowerLine.includes('connection healthy, last event received')) return false;
+            if (lowerLine.includes('stats:') && lowerLine.includes('calls saved')) return false;
+            if (lowerLine.includes('invalid iv length')) return false; 
+            
+            // Filter out large JSON objects (usually context or stats)
+            if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
+              if (line.length > 500) return false;
+            }
+            
+            // Filter out empty lines
+            if (!line.trim()) return false;
+            
+            return true;
+          });
+
+          const result = filteredLines.slice(-lines).join('\n');
+          await logAudit({ type: 'logs_read', lines, filtered: true });
+          return result || "No relevant logs found after filtering.";
         }
         return "Log file not found";
       } catch (error: any) {
