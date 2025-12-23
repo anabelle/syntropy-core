@@ -111,6 +111,39 @@ export const tools = {
                             return false;
                         if (lowerLine.includes('event kind 1 from'))
                             return false;
+                        // Additional filters for better ingestion value
+                        if (lowerLine.includes('debug'))
+                            return false; // DEBUG level logs
+                        if (lowerLine.includes('notice from'))
+                            return false; // Relay notices/errors
+                        if (lowerLine.includes('bad req:'))
+                            return false;
+                        if (lowerLine.includes('discovery skipping muted user'))
+                            return false; // meaningless ids
+                        if (lowerLine.includes('timeline lore processing deferred'))
+                            return false;
+                        if (lowerLine.includes('llm generation attempt') && lowerLine.includes('failed'))
+                            return false; // unless critical
+                        if (lowerLine.includes('all llm generation retries failed'))
+                            return false; // redundant
+                        if (lowerLine.includes('round') && lowerLine.includes('metrics:'))
+                            return false; // unless quality > 0
+                        if (lowerLine.includes('adaptive threshold activated'))
+                            return false;
+                        if (lowerLine.includes('continuing to round'))
+                            return false;
+                        if (lowerLine.includes('discovery round'))
+                            return false;
+                        if (lowerLine.includes('round topics (fallback):'))
+                            return false;
+                        if (lowerLine.includes('expanded search params:'))
+                            return false;
+                        if (lowerLine.includes('discovery "') && lowerLine.includes('": relevant'))
+                            return false; // generic discovery stats
+                        if (lowerLine.includes('generating text with'))
+                            return false; // LLM setup noise
+                        if (/\b[0-9a-f]{8}\b/.test(line))
+                            return false; // filter lines with meaningless hex ids
                         // Filter out large JSON objects (usually context or stats)
                         if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
                             if (line.length > 500)
@@ -248,7 +281,7 @@ export const tools = {
             console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
             await logAudit({ type: 'opencode_delegation_start', task });
             try {
-                const output = execSync(`opencode run --format json "${task.replace(/"/g, '\\"')}"`, {
+                const output = execSync(`opencode run --format json ${task}`, {
                     timeout: 6000000,
                     maxBuffer: 100 * 1024 * 1024
                 }).toString();
