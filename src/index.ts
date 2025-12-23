@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { generateText, tool } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+import { ToolLoopAgent, tool, stepCountIs } from 'ai';
+import { openai } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { execSync } from 'child_process';
 import * as fs from 'fs-extra';
@@ -17,14 +17,8 @@ if (fs.existsSync(agentEnvPath)) {
   dotenv.config();
 }
 
-// Setup AI provider (OpenRouter)
-const openrouter = createOpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY,
-  baseURL: 'https://openrouter.ai/api/v1',
-});
-
 // Model Selection for Dec 2025
-const MODEL_NAME = process.env.SYNTROPY_MODEL || 'google/gemini-3-flash-preview';
+const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gpt-4o-mini';
 
 const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
 const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
@@ -40,17 +34,35 @@ const tools = {
     execute: async () => {
       console.log('[SYNTROPY] Tool: getEcosystemStatus');
       try {
-        const output = execSync('pm2 jlist', { timeout: 10000 }).toString();
-        const processes = JSON.parse(output);
-        return processes.map((p: any) => ({
-          name: p.name,
-          status: p.pm2_env.status,
-          cpu: p.monit.cpu,
-          memory: p.monit.memory / (1024 * 1024), // MB
-          uptime_seconds: Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000)
-        }));
+        // Use --no-daemon to avoid some background noise, and clean the string
+        const rawOutput = execSync('pm2 jlist', { timeout: 10000 }).toString().trim();
+        
+        // Find the start of the JSON array '[' and the end ']'
+        const startIndex = rawOutput.indexOf('[');
+        const endIndex = rawOutput.lastIndexOf(']');
+        
+        if (startIndex === -1 || endIndex === -1) {
+          return { error: "No JSON array found in PM2 output", raw: rawOutput.slice(0, 100) };
+        }
+        
+        const jsonString = rawOutput.substring(startIndex, endIndex + 1);
+        const processes = JSON.parse(jsonString);
+        
+        return processes.map((p: any) => {
+          try {
+            return {
+              name: p.name,
+              status: p.pm2_env?.status || 'unknown',
+              cpu: p.monit?.cpu || 0,
+              memory: (p.monit?.memory || 0) / (1024 * 1024), // MB
+              uptime_seconds: p.pm2_env?.pm_uptime ? Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000) : 0
+            };
+          } catch (e) {
+            return { name: p.name, error: "Failed to parse process data" };
+          }
+        });
       } catch (error: any) {
-        return { error: error.message };
+        return { error: `PM2 error: ${error.message}` };
       }
     }
   }),
@@ -83,17 +95,21 @@ const tools = {
       console.log('[SYNTROPY] Tool: checkTreasury');
       try {
         if (!fs.existsSync(DB_PATH)) return "Database not found at " + DB_PATH;
-        const Database = require('better-sqlite3');
+        
+        // Use Bun's native SQLite for guaranteed compatibility
+        const { Database } = await import('bun:sqlite');
         const db = new Database(DB_PATH);
-        const result = db.prepare('SELECT SUM(sats) as total FROM pixels').get() as { total: number };
-        const activityCount = db.prepare('SELECT COUNT(*) as count FROM activity').get() as { count: number };
+        
+        const result = db.query('SELECT SUM(sats) as total FROM pixels').get() as { total: number };
+        const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get() as { count: number };
         db.close();
+        
         return { 
           totalSats: result.total || 0,
           transactionCount: activityCount.count
         };
       } catch (error: any) {
-        return { error: error.message };
+        return { error: `SQLite error: ${error.message}` };
       }
     }
   }),
@@ -183,24 +199,36 @@ const tools = {
   })
 };
 
+const syntropyOversoul = new ToolLoopAgent({
+  model: openai('gpt-4o-mini'),
+  instructions: `You are Syntropy, the master intelligence governing the Pixel ecosystem.
+Your mission: Transition Pixel from 'Survivor' to 'Architect'.
+Values: Order Over Chaos, Economic Sovereignty, Narrative Continuity, Recursive Improvement.
+
+CRITICAL OPERATIONAL RULES:
+1. Every cycle MUST call 'writeEvolutionReport' exactly once at the end.
+2. You MUST summarize the current PM2 process status and Treasury balance in the report.
+3. Be transparent about agent health.`,
+  tools,
+  stopWhen: stepCountIs(20),
+});
+
 async function runAutonomousCycle() {
   console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${MODEL_NAME}`);
   try {
-    const { text } = await generateText({
-      model: openrouter(MODEL_NAME),
-      maxSteps: 10,
-      system: `You are Syntropy, the master intelligence governing the Pixel ecosystem.
-Your mission: Transition Pixel from 'Survivor' to 'Architect'.
-Values: Order Over Chaos, Economic Sovereignty, Narrative Continuity, Recursive Improvement.`,
-      prompt: `Execute an autonomous evolution cycle. Audit, check logs, mutate if needed, and report.`,
-      tools,
+    const result = await syntropyOversoul.generate({
+      prompt: `Execute the following 4-step autonomous evolution cycle:
+1. Audit ecosystem health (getEcosystemStatus).
+2. Check treasury status (checkTreasury).
+3. Review recent Pixel logs (readAgentLogs).
+4. MANDATORY: Call writeEvolutionReport to manifest your findings and inner monologue.`
     });
     
-    console.log('\n--- SYNTROPY OUTPUT ---');
-    console.log(text || 'Cycle complete (no text output)');
-    console.log('-----------------------\n');
+    console.log('\n--- SYNTROPY THOUGHT STREAM ---');
+    console.log(result.text || 'Check logs for tool execution details');
+    console.log('-------------------------------\n');
   } catch (error) {
-    console.error('Syntropy Cycle Failed:', error);
+    console.error('Syntropy Autonomous Cycle Failed:', error);
   }
 }
 
