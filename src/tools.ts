@@ -92,6 +92,17 @@ export const tools = {
           
           const filteredLines = logLines.filter(line => {
             const lowerLine = line.toLowerCase();
+            
+            // Priority: Always keep these high-value logs
+            if (line.includes('[REFLECTION]') || 
+                line.includes('[LORE]') || 
+                line.includes('[ZAP]') || 
+                line.includes('[DM]') ||
+                line.includes('[NOSTR] Replied to') ||
+                line.includes('[NOSTR] Reacted to')) {
+              return true;
+            }
+
             // Filter out common high-frequency noise
             if (lowerLine.includes('too many concurrent reqs')) return false;
             if (lowerLine.includes('drizzleadapter creatememory')) return false;
@@ -99,6 +110,8 @@ export const tools = {
             if (lowerLine.includes('connection healthy, last event received')) return false;
             if (lowerLine.includes('stats:') && lowerLine.includes('calls saved')) return false;
             if (lowerLine.includes('invalid iv length')) return false; 
+            if (lowerLine.includes('skipping old mention')) return false;
+            if (lowerLine.includes('event kind 1 from')) return false;
             
             // Filter out large JSON objects (usually context or stats)
             if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
