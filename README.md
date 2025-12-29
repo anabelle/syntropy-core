@@ -10,15 +10,15 @@ For a detailed breakdown of Syntropy's purpose and directives, see [VISION.md](.
 
 ## Features
 - **Autonomous Evolution Cycles**: Scheduled analysis and mutation of agent DNA.
-- **Ecosystem Monitoring**: Real-time status tracking of PM2 processes.
+- **Ecosystem Monitoring**: Real-time status tracking of Docker Compose services.
 - **Treasury Management**: Monitoring sat flow in the LNPixels database.
 - **Character Mutation**: Programmatic refactoring of agent character files.
 
 ## Tech Stack
 - **Runtime**: Bun
-- **Intelligence**: AI SDK (OpenAI gpt-4o)
-- **Persistence**: SQLite (via LNPixels API)
-- **Process Management**: PM2
+- **Intelligence**: AI SDK (OpenAI gpt-4o-mini)
+- **Persistence**: SQLite (direct access to `pixels.db` and `activity.db`)
+- **Process Management**: Docker Compose
 
 ## License
 MIT
