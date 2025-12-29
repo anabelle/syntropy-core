@@ -214,34 +214,50 @@ export const tools = {
     }),
     execute: async ({ file, content }) => {
       console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
-      try {
-        const filePath = path.resolve(CHARACTER_DIR, file);
-        const varName = file.split('.')[0];
+      const filePath = path.resolve(CHARACTER_DIR, file);
+      const varName = file.split('.')[0];
+      let oldContent = "";
 
-        // Relaxed validation: Check for export const/let/var with flexible whitespace
+      try {
+        // 1. Validation de base
         const exportRegex = new RegExp(`export\\s+(const|let|var)\\s+${varName}\\b`, 'm');
         if (!exportRegex.test(content)) {
-          const error = `Validation failed: Content must export '${varName}' using 'export const ${varName} = ...'`;
-          // Log to console for debugging but skip high-frequency audit log noise if it's a minor validation fail
-          console.warn(`[SYNTROPY] ${error}`);
-          return { error };
+          return { error: `Validation failed: Content must export '${varName}'` };
+        }
+
+        // 2. Backup old content
+        if (fs.existsSync(filePath)) {
+          oldContent = await fs.readFile(filePath, 'utf-8');
         }
 
         await logAudit({ type: 'mutation_start', file });
+
+        // 3. Write new content
         await fs.writeFile(filePath, content);
+
         try {
-          await execAsync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-          // Docker-native restart: Target the likely container name or use service name if running in same project
+          // 4. Validate build ecosystem-wide
+          console.log('[SYNTROPY] Validating mutation build...');
+          await execAsync('./scripts/validate-build.sh', { cwd: PIXEL_ROOT, timeout: 300000 });
+
+          // 5. Build agent specifically and restart
+          await execAsync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
           await execAsync('docker restart pixel-agent-1', { timeout: 20000 });
-          await syncAll(); // Sync changes to GitHub after build/reboot
+
+          await syncAll();
           await logAudit({ type: 'mutation_success', file });
+          return { success: true, mutatedFile: file };
         } catch (buildError: any) {
-          await logAudit({ type: 'mutation_error', file, error: buildError.message });
-          return { error: `DNA updated but container restart failed: ${buildError.message}` };
+          // 6. Rollback
+          console.error(`[SYNTROPY] Mutation build failed: ${buildError.message}. Rolling back...`);
+          if (oldContent) {
+            await fs.writeFile(filePath, oldContent);
+          }
+          await logAudit({ type: 'mutation_rollback', file, error: buildError.message });
+          return { error: `Mutation failed validation. Reverted to previous stable version. Error: ${buildError.message}` };
         }
-        return { success: true, mutatedFile: file };
       } catch (error: any) {
-        return { error: `Mutation failed: ${error.message}` };
+        return { error: `Mutation process failed: ${error.message}` };
       }
     }
   }),
