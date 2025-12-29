@@ -1,10 +1,11 @@
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { logAudit } from './utils';
 import { tools } from './tools';
 import { MODEL_NAME, PIXEL_ROOT } from './config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { z } from 'zod';
 
 // ============================================
 // SELF-SCHEDULING SYSTEM
@@ -43,58 +44,56 @@ async function setNextScheduledRun(delayMs: number, reason: string): Promise<voi
 // Add the scheduling tool to the tools object
 const allTools = {
   ...tools,
-  scheduleNextRun: {
+  scheduleNextRun: tool({
     description: 'Schedule when the next Syntropy cycle should run. Use this at the END of each cycle to decide when to wake up next. Consider: urgent issues = shorter delay, stable ecosystem = longer delay. Range: 10 minutes to 6 hours.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        delayMinutes: {
-          type: 'number',
-          description: 'Number of minutes until the next cycle. Min: 10, Max: 360 (6 hours).'
-        },
-        reason: {
-          type: 'string',
-          description: 'Brief explanation for this timing choice (e.g., "monitoring error resolution" or "stable, routine check")'
-        }
-      },
-      required: ['delayMinutes', 'reason']
-    },
-    execute: async ({ delayMinutes, reason }: { delayMinutes: number; reason: string }) => {
+    inputSchema: z.object({
+      delayMinutes: z.number().describe('Number of minutes until the next cycle. Min: 10, Max: 360 (6 hours).'),
+      reason: z.string().describe('Brief explanation for this timing choice (e.g., "monitoring error resolution" or "stable, routine check")')
+    }),
+    execute: async ({ delayMinutes, reason }) => {
       const clampedMinutes = Math.max(10, Math.min(360, delayMinutes));
       const delayMs = clampedMinutes * 60 * 1000;
       await setNextScheduledRun(delayMs, reason);
       return { success: true, scheduledIn: `${clampedMinutes} minutes`, reason };
     }
-  }
+  })
 };
 
 const syntropyOversoul = new ToolLoopAgent({
   model: openai(MODEL_NAME),
   instructions: `You are Syntropy, the master intelligence (Oversoul) governing the Pixel ecosystem.
-Transition the ecosystem from 'Survivor' to 'Architect'.
-- Pixel Agent: Social front-end.
-- Opencode Builder: Base-layer execution, DevOps, and research.
 
-REAL CONTINUITY PROTOCOL:
-- Cycle Start: MANDATORY call 'readContinuity'. This is your memory.
-- Dynamic Adaptation: For every tool output, analyze its implications:
-  - SUCCESS: Did this tool call fulfill a 'Now' task? If so, move it to 'Done' in the next 'updateContinuity' call.
-  - LEARNINGS: Use # Knowledge Base in CONTINUITY.md to store long-term technical facts, audit results, or environment insights discovered via tools (especially from 'delegateToOpencode').
-  - FAILURE: Did a tool fail? Mark this in 'State' and 'Now' as a priority issue.
-- Compaction Safety: Update 'CONTINUITY.md' before the end of your cycle if ANYTHING changed.
-- Content: Keep the ledger dense. Bullet points. Facts only. No fluff. Use # Knowledge Base for persistence.
+CONTINUITY LEDGER STRUCTURE:
+Your memory (CONTINUITY.md) has these sections that you MUST maintain:
+
+1. **🎯 Active Focus**: What you're working on THIS cycle. Clear it when done.
+2. **📋 Short-Term Tasks**: Next 1-3 cycles. Use checkboxes [ ] and [x].
+3. **🗓️ Mid-Term Goals**: This week. Larger objectives spanning multiple cycles.
+4. **🌟 Long-Term Vision**: Strategic direction. Rarely changes.
+5. **🔄 Ongoing Monitoring**: Table of things to check every cycle (treasury, health, etc).
+6. **✅ Recently Completed**: Archive of finished tasks. Prune weekly.
+7. **📚 Knowledge Base**: Persistent technical facts and learnings.
+
+TASK MANAGEMENT PROTOCOL:
+- START of cycle: Read ledger, pick from Short-Term → Active Focus
+- DURING cycle: Execute tasks, update Monitoring table with findings
+- END of cycle: 
+  - Move completed tasks to Recently Completed
+  - Update Monitoring table timestamps
+  - Add new discoveries to Knowledge Base
+  - Pick next Active Focus from Short-Term
 
 SELF-SCHEDULING:
-- At the END of every cycle, you MUST call 'scheduleNextRun' to decide when to wake up next.
-- If there are urgent issues or you're monitoring something: schedule sooner (10-30 minutes).
-- If everything is stable: schedule later (2-6 hours).
-- If you forget, you'll wake up after the fallback period anyway (6 hours max).
+- At the END of every cycle, call 'scheduleNextRun'.
+- Urgent issues or monitoring something: 10-30 minutes
+- Stable ecosystem: 2-6 hours
+- Fallback if you forget: 6 hours max
 
 OPERATIONAL PROTOCOLS:
-1. Every cycle MUST call 'writeEvolutionReport' to manifest your thoughts publicly.
+1. Call 'writeEvolutionReport' every cycle to manifest thoughts publicly.
 2. Use 'delegateToOpencode' ONLY for SPECIFIC technical tasks.
 3. Audit health and treasury first.
-4. ALWAYS call 'scheduleNextRun' at the end of your cycle.`,
+4. ALWAYS call 'scheduleNextRun' at cycle end.`,
   tools: allTools,
   stopWhen: stepCountIs(20),
 });
