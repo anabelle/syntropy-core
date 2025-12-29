@@ -298,31 +298,70 @@ export const tools = {
   }),
 
   delegateToOpencode: tool({
-    description: 'Delegate a SPECIFIC technical task to the Opencode Builder. Useful for: 1. Deep coding/refactoring, 2. Web searching for latest info/docs, 3. Server admin & DevOps tasks (sudo access). Instructions MUST be clear and specific. The response will contain technical details that you should record in your Knowledge Base.',
+    description: `Delegate a task to the Opencode AI Agent - a powerful background assistant similar to you. 
+    
+Opencode is an autonomous coding agent that can:
+- 🔍 Search the web for latest documentation, solutions, or research
+- 💻 Read, analyze, and modify code across the entire codebase  
+- 🛠️ Execute shell commands (with sudo access for DevOps tasks)
+- 📝 Create files, run tests, debug issues
+- 🔧 Perform complex multi-step technical tasks
+
+DELEGATION BEST PRACTICES:
+- Be SPECIFIC and DETAILED in your task description
+- Include context: what problem you're solving, what you've already tried
+- Specify expected output format if needed
+- Opencode works autonomously - it may take several minutes for complex tasks
+
+EXAMPLES:
+- "Search the web for the latest ElizaOS plugin documentation and summarize the plugin registration API"
+- "Audit the pixel-agent logs for the past 24 hours and identify recurring errors"
+- "Refactor the nostr plugin to handle connection timeouts gracefully"
+- "Check if nginx is configured correctly and fix any issues"
+
+The response summary should be recorded in your Knowledge Base for future reference.`,
     inputSchema: z.object({
-      task: z.string().describe('The detailed technical instruction. Results should be integrated into the Continuity Ledger Knowledge Base.')
+      task: z.string().describe('Detailed technical instruction for Opencode. Be specific about what you want done and any constraints.')
     }),
     execute: async ({ task }) => {
-      console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
+      console.log(`[SYNTROPY] Delegating to Opencode Agent: ${task}`);
       await logAudit({ type: 'opencode_delegation_start', task });
       try {
-        const { stdout: output } = await execAsync(`opencode run --format json ${task}`, {
-          timeout: 6000000,
+        // Escape the task to prevent shell injection
+        const escapedTask = task.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+        const { stdout: output } = await execAsync(`opencode run "${escapedTask}"`, {
+          timeout: 6000000, // 100 minutes max
           maxBuffer: 100 * 1024 * 1024
         });
-        let summary = "";
-        output.toString().trim().split('\n').forEach(line => {
+
+        // Parse output - opencode returns mixed format
+        let summary = output.toString().trim();
+
+        // Try to extract text from JSON lines if present
+        const lines = summary.split('\n');
+        let extractedText = '';
+        for (const line of lines) {
           try {
             const data = JSON.parse(line);
-            if (data.type === 'text') summary += data.part.text;
-          } catch (e) { }
-        });
-        await syncAll(); // Sync changes to GitHub after builder execution
-        await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 1000) });
-        return { success: true, summary: summary || "Task completed." };
+            if (data.type === 'text' && data.part?.text) {
+              extractedText += data.part.text;
+            }
+          } catch (e) {
+            // Not JSON, keep raw line
+            if (line.trim() && !line.startsWith('{')) {
+              extractedText += line + '\n';
+            }
+          }
+        }
+
+        summary = extractedText || summary;
+
+        await syncAll(); // Sync any code changes to GitHub
+        await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
+        return { success: true, summary: summary.slice(0, 5000) || "Task completed successfully." };
       } catch (error: any) {
         await logAudit({ type: 'opencode_delegation_error', task, error: error.message });
-        return { error: `Opencode delegation failed: ${error.message}` };
+        return { error: `Opencode Agent error: ${error.message}` };
       }
     }
   })

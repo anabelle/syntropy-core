@@ -212,9 +212,46 @@ async function scheduleNextCycle() {
 // ============================================
 // STARTUP
 // ============================================
-console.log('[SYNTROPY] Starting Oversoul with self-scheduling...');
-console.log(`[SYNTROPY] Fallback interval: ${MAX_INTERVAL_MS / 60000} minutes (max)`);
-console.log(`[SYNTROPY] Minimum interval: ${MIN_INTERVAL_MS / 60000} minutes`);
+async function verifyOpencode(): Promise<boolean> {
+  console.log('[SYNTROPY] Verifying Opencode Agent availability...');
+  try {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
 
-// Run immediately on startup
-runAutonomousCycle();
+    const { stdout } = await execAsync('opencode run "Say hello to Syntropy in one friendly sentence"', {
+      timeout: 60000, // 1 minute timeout for greeting
+      maxBuffer: 10 * 1024 * 1024
+    });
+
+    console.log(`[SYNTROPY] Opencode says: ${stdout.trim().slice(0, 200)}`);
+    await logAudit({ type: 'opencode_verified', response: stdout.trim().slice(0, 500) });
+    return true;
+  } catch (error: any) {
+    console.error(`[SYNTROPY] Opencode verification failed: ${error.message}`);
+    await logAudit({ type: 'opencode_verification_failed', error: error.message });
+    return false;
+  }
+}
+
+async function startup() {
+  console.log('[SYNTROPY] ═══════════════════════════════════════');
+  console.log('[SYNTROPY] Starting Oversoul with self-scheduling');
+  console.log('[SYNTROPY] ═══════════════════════════════════════');
+  console.log(`[SYNTROPY] Fallback interval: ${MAX_INTERVAL_MS / 60000} minutes (max)`);
+  console.log(`[SYNTROPY] Minimum interval: ${MIN_INTERVAL_MS / 60000} minutes`);
+
+  // Verify Opencode is available
+  const opencodeReady = await verifyOpencode();
+  if (!opencodeReady) {
+    console.warn('[SYNTROPY] ⚠️  Opencode not available - delegation will fail');
+    console.warn('[SYNTROPY] Continuing without Opencode...');
+  } else {
+    console.log('[SYNTROPY] ✅ Opencode Agent verified and ready');
+  }
+
+  // Run first cycle
+  runAutonomousCycle();
+}
+
+startup();
