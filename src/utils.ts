@@ -6,6 +6,8 @@ import { PIXEL_ROOT, AUDIT_LOG_PATH } from './config';
 
 const execAsync = promisify(exec);
 
+const MAX_AUDIT_ENTRIES = 500;
+
 export const logAudit = async (entry: any) => {
   try {
     const newEntry = {
@@ -13,9 +15,23 @@ export const logAudit = async (entry: any) => {
       ...entry
     };
 
-    // Append-only: write each entry as a JSON line to avoid read-modify-write anti-pattern
+    // 1. Append the new entry
     const jsonLine = JSON.stringify(newEntry) + '\n';
     await fs.appendFile(AUDIT_LOG_PATH, jsonLine);
+
+    // 2. FIFO Pruning: Keep log length under control
+    try {
+      const content = await fs.readFile(AUDIT_LOG_PATH, 'utf-8');
+      const lines = content.trim().split('\n');
+
+      if (lines.length > MAX_AUDIT_ENTRIES) {
+        const prunedContent = lines.slice(-MAX_AUDIT_ENTRIES).join('\n') + '\n';
+        await fs.writeFile(AUDIT_LOG_PATH, prunedContent);
+        // console.log(`[SYNTROPY] Audit log pruned to ${MAX_AUDIT_ENTRIES} entries`);
+      }
+    } catch (pruneError) {
+      // Non-critical error, don't fail the audit write
+    }
 
     console.log(`[SYNTROPY] Audit log updated: ${newEntry.type}`);
   } catch (error: any) {
@@ -42,16 +58,16 @@ export const syncAll = async () => {
 
         await execAsync('git add .', { cwd: repo });
         try {
-            await execAsync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo });
+          await execAsync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo });
         } catch (e) {
-            // Ignore if no changes to commit
+          // Ignore if no changes to commit
         }
-        
+
         try {
-             const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
-             await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
+          const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
+          await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
         } catch (e) {
-             // Push might fail if no upstream or auth issues, catch silently to not break loop
+          // Push might fail if no upstream or auth issues, catch silently to not break loop
         }
       } catch (e) {
         // Ignore general git errors

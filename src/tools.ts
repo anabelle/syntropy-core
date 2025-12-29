@@ -4,17 +4,20 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { 
-  PIXEL_ROOT, 
-  PIXEL_AGENT_DIR, 
-  CHARACTER_DIR, 
-  DB_PATH, 
-  LOG_PATH 
+import {
+  PIXEL_ROOT,
+  PIXEL_AGENT_DIR,
+  CHARACTER_DIR,
+  DB_PATH,
+  LOG_PATH
 } from './config';
 import { logAudit, syncAll } from './utils';
 
 const execAsync = promisify(exec);
-const CONTINUITY_PATH = path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
+const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
+const CONTINUITY_PATH = isDocker
+  ? path.resolve(PIXEL_ROOT, 'CONTINUITY.md')
+  : path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
 
 export const tools = {
   readContinuity: tool({
@@ -51,35 +54,40 @@ export const tools = {
   }),
 
   getEcosystemStatus: tool({
-    description: 'Get status of all processes in the ecosystem via PM2',
+    description: 'Get status of all containers in the ecosystem via Docker',
     inputSchema: z.object({
       confirm: z.boolean().describe('Set to true to perform ecosystem audit')
     }),
     execute: async () => {
-      console.log('[SYNTROPY] Tool: getEcosystemStatus');
+      console.log('[SYNTROPY] Tool: getEcosystemStatus (Docker)');
       try {
-        const { stdout: rawOutput } = await execAsync('pm2 jlist', { timeout: 10000 });
-        const outputStr = rawOutput.toString().trim();
-        const startIndex = outputStr.indexOf('[');
-        const endIndex = outputStr.lastIndexOf(']');
-        if (startIndex === -1 || endIndex === -1) return { error: "No JSON found" };
-        const processes = JSON.parse(outputStr.substring(startIndex, endIndex + 1));
-        const status = processes.map((p: any) => ({
-          name: p.name,
-          status: p.pm2_env?.status || 'unknown',
-          cpu: p.monit?.cpu || 0,
-          memory: (p.monit?.memory || 0) / (1024 * 1024),
-          uptime_seconds: p.pm2_env?.pm_uptime ? Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000) : 0
-        }));
+        // Get container status in JSON format
+        const { stdout: rawOutput } = await execAsync('docker ps --format "{{json .}}"', { timeout: 10000 });
+        const lines = rawOutput.toString().trim().split('\n');
+
+        const status = lines.map(line => {
+          try {
+            const container = JSON.parse(line);
+            return {
+              name: container.Names,
+              status: container.Status,
+              image: container.Image,
+              id: container.ID
+            };
+          } catch (e) {
+            return null;
+          }
+        }).filter(Boolean);
+
         await logAudit({ type: 'ecosystem_audit', status });
         return status;
       } catch (error: any) {
         await logAudit({ type: 'audit_error', error: error.message });
-        return { error: `PM2 error: ${error.message}` };
+        return { error: `Docker error: ${error.message}` };
       }
     }
   }),
-  
+
   readAgentLogs: tool({
     description: 'Read recent logs from the Pixel agent. Automatically filters noise for Syntropy intelligence.',
     inputSchema: z.object({
@@ -92,17 +100,17 @@ export const tools = {
           // Read 5x more lines than requested to have enough data after filtering
           const { stdout: rawLogs } = await execAsync(`tail -n ${lines * 5} ${LOG_PATH}`, { timeout: 10000 });
           const logLines = rawLogs.toString().split('\n');
-          
+
           const filteredLines = logLines.filter(line => {
             const lowerLine = line.toLowerCase();
-            
+
             // Priority: Always keep these high-value logs
-            if (line.includes('[REFLECTION]') || 
-                line.includes('[LORE]') || 
-                line.includes('[ZAP]') || 
-                line.includes('[DM]') ||
-                line.includes('[NOSTR] Replied to') ||
-                line.includes('[NOSTR] Reacted to')) {
+            if (line.includes('[REFLECTION]') ||
+              line.includes('[LORE]') ||
+              line.includes('[ZAP]') ||
+              line.includes('[DM]') ||
+              line.includes('[NOSTR] Replied to') ||
+              line.includes('[NOSTR] Reacted to')) {
               return true;
             }
 
@@ -133,15 +141,15 @@ export const tools = {
             if (lowerLine.includes('discovery "') && lowerLine.includes('": relevant')) return false; // generic discovery stats
             if (lowerLine.includes('generating text with')) return false; // LLM setup noise
             if (/\b[0-9a-f]{8}\b/.test(line)) return false; // filter lines with meaningless hex ids
-            
+
             // Filter out large JSON objects (usually context or stats)
             if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
               if (line.length > 500) return false;
             }
-            
+
             // Filter out empty lines
             if (!line.trim()) return false;
-            
+
             return true;
           });
 
@@ -155,7 +163,7 @@ export const tools = {
       }
     }
   }),
-  
+
   checkTreasury: tool({
     description: 'Check the Lightning Network treasury balance (LNPixels DB)',
     inputSchema: z.object({
@@ -209,7 +217,7 @@ export const tools = {
       try {
         const filePath = path.resolve(CHARACTER_DIR, file);
         const varName = file.split('.')[0];
-        
+
         // Relaxed validation: Check for export const/let/var with flexible whitespace
         const exportRegex = new RegExp(`export\\s+(const|let|var)\\s+${varName}\\b`, 'm');
         if (!exportRegex.test(content)) {
@@ -223,12 +231,13 @@ export const tools = {
         await fs.writeFile(filePath, content);
         try {
           await execAsync('bun install && bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-          await execAsync('pm2 restart pixel-agent', { timeout: 10000 });
+          // Docker-native restart: Target the likely container name or use service name if running in same project
+          await execAsync('docker restart pixel-agent-1', { timeout: 20000 });
           await syncAll(); // Sync changes to GitHub after build/reboot
           await logAudit({ type: 'mutation_success', file });
         } catch (buildError: any) {
           await logAudit({ type: 'mutation_error', file, error: buildError.message });
-          return { error: `DNA updated but build/restart failed: ${buildError.message}` };
+          return { error: `DNA updated but container restart failed: ${buildError.message}` };
         }
         return { success: true, mutatedFile: file };
       } catch (error: any) {
@@ -236,7 +245,7 @@ export const tools = {
       }
     }
   }),
-  
+
   writeEvolutionReport: tool({
     description: 'Write an evolution report and manifest monologue to the web front-end.',
     inputSchema: z.object({
@@ -247,12 +256,18 @@ export const tools = {
       console.log(`[SYNTROPY] Tool: writeEvolutionReport (${title})`);
       await logAudit({ type: 'evolution_report', title });
       try {
-        const reportDir = path.resolve(PIXEL_ROOT, 'docs/evolution');
+        const reportDir = isDocker
+          ? path.resolve(PIXEL_ROOT, 'audit/evolution')
+          : path.resolve(PIXEL_ROOT, 'docs/evolution');
         await fs.ensureDir(reportDir);
         const filename = `${Date.now()}-${title.toLowerCase().replace(/\s+/g, '-')}.md`;
         await fs.writeFile(path.resolve(reportDir, filename), content);
-        
-        await fs.writeJson(path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json'), {
+
+        const syntropyJsonPath = isDocker
+          ? path.resolve(PIXEL_ROOT, 'audit/syntropy.json')
+          : path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json');
+
+        await fs.writeJson(syntropyJsonPath, {
           lastUpdate: new Date().toISOString(),
           title,
           content,
@@ -275,16 +290,16 @@ export const tools = {
       console.log(`[SYNTROPY] Delegating to Opencode: ${task}`);
       await logAudit({ type: 'opencode_delegation_start', task });
       try {
-        const { stdout: output } = await execAsync(`opencode run --format json ${task}`, { 
-          timeout: 6000000, 
-          maxBuffer: 100 * 1024 * 1024 
+        const { stdout: output } = await execAsync(`opencode run --format json ${task}`, {
+          timeout: 6000000,
+          maxBuffer: 100 * 1024 * 1024
         });
         let summary = "";
         output.toString().trim().split('\n').forEach(line => {
           try {
             const data = JSON.parse(line);
             if (data.type === 'text') summary += data.part.text;
-          } catch (e) {}
+          } catch (e) { }
         });
         await syncAll(); // Sync changes to GitHub after builder execution
         await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 1000) });
