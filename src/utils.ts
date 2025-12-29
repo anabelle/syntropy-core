@@ -58,7 +58,8 @@ export const syncAll = async () => {
 
         await execAsync('git add .', { cwd: repo });
         try {
-          await execAsync('git commit -m "chore: autonomous sync after mutation"', { cwd: repo });
+          // [skip ci] prevents GitHub Actions from triggering a deploy loop
+          await execAsync('git commit -m "chore(syntropy): autonomous sync [skip ci]"', { cwd: repo });
         } catch (e) {
           // Ignore if no changes to commit
         }
