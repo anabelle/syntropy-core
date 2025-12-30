@@ -22,6 +22,7 @@ export const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 export const DB_PATH = process.env.DB_PATH || path.resolve(PIXEL_ROOT, isDocker ? 'pixels.db' : 'data/pixels.db');
 export const LOG_PATH = process.env.LOG_PATH || (isDocker ? '/app/logs/agent.log' : '/home/pixel/.pm2/logs/pixel-agent-out-2.log');
 export const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.resolve(isDocker ? '/app/audit' : PIXEL_ROOT, isDocker ? 'audit.json' : 'pixel-landing/public/audit.json');
+export const OPENCODE_LIVE_LOG = path.resolve(PIXEL_ROOT, 'logs/opencode_live.log');
 
 // Ensure audit directory exists
 const auditDir = path.dirname(AUDIT_LOG_PATH);

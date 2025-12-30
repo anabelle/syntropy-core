@@ -9,7 +9,8 @@ import {
   PIXEL_AGENT_DIR,
   CHARACTER_DIR,
   DB_PATH,
-  LOG_PATH
+  LOG_PATH,
+  OPENCODE_LIVE_LOG
 } from './config';
 import { logAudit, syncAll } from './utils';
 
@@ -328,41 +329,65 @@ The response summary should be recorded in your Knowledge Base for future refere
       await logAudit({ type: 'opencode_delegation_start', task });
 
       try {
-        const { exec } = require('child_process');
-        const { promisify } = require('util');
-        const execAsync = promisify(exec);
+        const { spawn } = require('child_process');
 
-        // Robust Shell Escaping
-        // 1. Escape backslashes
-        // 2. Escape double quotes (since we wrap in double quotes)
-        // 3. Escape $ and ` to prevent shell expansion
-        const escapedTask = task
-          .replace(/\\/g, '\\\\')
-          .replace(/"/g, '\\"')
-          .replace(/\$/g, '\\$')
-          .replace(/`/g, '\\`');
+        // Ensure log directory exists
+        await fs.ensureDir(path.dirname(OPENCODE_LIVE_LOG));
+        const logStream = fs.createWriteStream(OPENCODE_LIVE_LOG, { flags: 'a' });
 
-        // Execute with wrapping quotes & CI env, close stdin
-        const { stdout: output } = await execAsync(`opencode run "${escapedTask}" < /dev/null`, {
-          timeout: 6000000, // 100 minutes max
-          maxBuffer: 100 * 1024 * 1024,
-          env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
+        const timestamp = new Date().toISOString();
+        logStream.write(`\n--- DELEGATION START: ${timestamp} ---\nTASK: ${task}\n\n`);
+
+        return new Promise((resolve, reject) => {
+          const child = spawn(`opencode run "${task.replace(/"/g, '\\"')}" < /dev/null`, [], {
+            env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
+            shell: true
+          });
+
+          let fullOutput = '';
+
+          child.stdout.on('data', (data: any) => {
+            const str = data.toString();
+            fullOutput += str;
+            logStream.write(str);
+          });
+
+          child.stderr.on('data', (data: any) => {
+            const str = data.toString();
+            logStream.write(`[STDERR] ${str}`);
+          });
+
+          child.on('close', async (code: number) => {
+            logStream.write(`\n--- DELEGATION END: ${new Date().toISOString()} (Exit Code: ${code}) ---\n`);
+            logStream.end();
+
+            if (code === 0) {
+              console.log('[SYNTROPY] Opencode task completed');
+              // Try to filter JSON lines if mixed content
+              let summary = fullOutput.trim();
+              const lines = summary.split('\n');
+              const filteredLines = lines.filter((l: string) => !l.startsWith('{') && !l.startsWith('['));
+              if (filteredLines.length > 0) {
+                summary = filteredLines.join('\n');
+              }
+
+              await syncAll(); // Sync code changes
+              await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
+              resolve({ success: true, summary: summary.slice(0, 5000) || "Task completed successfully." });
+            } else {
+              const errorMsg = `Opencode exited with code ${code}`;
+              console.error(`[SYNTROPY] Opencode delegation failed: ${errorMsg}`);
+              await logAudit({ type: 'opencode_delegation_error', error: errorMsg });
+              resolve({ error: `Delegation failed: ${errorMsg}` });
+            }
+          });
+
+          child.on('error', (err: any) => {
+            logStream.write(`[PROCESS ERROR] ${err.message}\n`);
+            logStream.end();
+            reject(err);
+          });
         });
-
-        // Parse output
-        let summary = output.toString().trim();
-
-        // Try to filter JSON lines if mixed content
-        const lines = summary.split('\n');
-        const filteredLines = lines.filter((l: string) => !l.startsWith('{') && !l.startsWith('['));
-        if (filteredLines.length > 0) {
-          summary = filteredLines.join('\n');
-        }
-
-        console.log('[SYNTROPY] Opencode task completed');
-        await syncAll(); // Sync code changes
-        await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
-        return { success: true, summary: summary.slice(0, 5000) || "Task completed successfully." };
 
       } catch (error: any) {
         console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
