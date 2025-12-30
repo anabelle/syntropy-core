@@ -310,6 +310,30 @@ async function startup() {
     }
   }
 
+  // Check if we should wait before running first cycle
+  const schedule = await getNextScheduledRun();
+  if (schedule) {
+    const nextRunTime = new Date(schedule.nextRunAt).getTime();
+    const now = Date.now();
+    const delayMs = nextRunTime - now;
+
+    if (delayMs > MIN_INTERVAL_MS) {
+      // Not due yet - wait until scheduled time
+      const waitMinutes = Math.round(delayMs / 60000);
+      console.log(`[SYNTROPY] Schedule found: next run at ${schedule.nextRunAt}`);
+      console.log(`[SYNTROPY] Waiting ${waitMinutes} minutes before first cycle (${schedule.reason})`);
+      await logAudit({ type: 'startup_deferred', nextRunAt: schedule.nextRunAt, waitMinutes, reason: schedule.reason });
+      nextRunTimeout = setTimeout(runAutonomousCycle, delayMs);
+      return;
+    } else if (delayMs > 0) {
+      console.log(`[SYNTROPY] Schedule found but due soon (${Math.round(delayMs / 60000)} min) - running now`);
+    } else {
+      console.log(`[SYNTROPY] Schedule found but past due - running now`);
+    }
+  } else {
+    console.log('[SYNTROPY] No schedule found - running first cycle immediately');
+  }
+
   // Run first cycle
   runAutonomousCycle();
 }
