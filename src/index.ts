@@ -229,7 +229,7 @@ async function verifyOpencode(): Promise<boolean> {
     const { promisify } = require('util');
     const execAsync = promisify(exec);
 
-    const { stdout } = await execAsync('opencode run "Say hello to Syntropy in one friendly sentence"', {
+    const { stdout } = await execAsync('opencode run Say hello to Syntropy in one friendly sentence', {
       timeout: 60000, // 1 minute timeout for greeting
       maxBuffer: 10 * 1024 * 1024
     });

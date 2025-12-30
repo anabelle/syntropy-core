@@ -327,9 +327,15 @@ The response summary should be recorded in your Knowledge Base for future refere
       console.log(`[SYNTROPY] Delegating to Opencode Agent: ${task}`);
       await logAudit({ type: 'opencode_delegation_start', task });
       try {
-        // Escape the task to prevent shell injection
-        const escapedTask = task.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-        const { stdout: output } = await execAsync(`opencode run "${escapedTask}"`, {
+        // Escape special characters to prevent shell injection (no surrounding quotes)
+        const escapedTask = task
+          .replace(/\\/g, '\\\\')       // Escape backslashes first
+          .replace(/"/g, '\\"')         // Escape double quotes
+          .replace(/\$/g, '\\$')        // Escape dollar signs
+          .replace(/`/g, '\\`')         // Escape backticks
+          .replace(/[|&;<>()]/g, '\\$&'); // Escape shell operators
+
+        const { stdout: output } = await execAsync(`opencode run ${escapedTask}`, {
           timeout: 6000000, // 100 minutes max
           maxBuffer: 100 * 1024 * 1024
         });
