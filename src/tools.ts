@@ -342,10 +342,11 @@ The response summary should be recorded in your Knowledge Base for future refere
           .replace(/\$/g, '\\$')
           .replace(/`/g, '\\`');
 
-        // Execute with wrapping quotes
+        // Execute with wrapping quotes & CI env
         const { stdout: output } = await execAsync(`opencode run "${escapedTask}"`, {
           timeout: 6000000, // 100 minutes max
-          maxBuffer: 100 * 1024 * 1024
+          maxBuffer: 100 * 1024 * 1024,
+          env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
         });
 
         // Parse output
