@@ -33,3 +33,6 @@ if (!fs.existsSync(auditDir)) {
 // Ensure API Key presence for OpenRouter/OpenAI
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// Opencode Delegation Model
+export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7-free';

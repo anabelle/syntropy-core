@@ -11,7 +11,8 @@ import {
   DB_PATH,
   LOG_PATH,
   OPENCODE_LIVE_LOG,
-  AUDIT_LOG_PATH
+  AUDIT_LOG_PATH,
+  OPENCODE_MODEL
 } from './config';
 import { logAudit, syncAll } from './utils';
 
@@ -504,7 +505,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
 
         return new Promise((resolve, reject) => {
           const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
-          const cmd = `opencode run -m "opencode/glm-4.7-free" ${fileFlags} "${escapedBriefing}" < /dev/null`;
+          const cmd = `opencode run -m "${OPENCODE_MODEL}" ${fileFlags} "${escapedBriefing}" < /dev/null`;
 
           const child = spawn(cmd, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
