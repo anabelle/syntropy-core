@@ -223,28 +223,22 @@ async function scheduleNextCycle() {
 // STARTUP
 // ============================================
 async function verifyOpencode(): Promise<boolean> {
-  console.log('[SYNTROPY] Verifying Opencode Agent availability (SDK)...');
+  console.log('[SYNTROPY] Verifying Opencode Agent availability (CLI)...');
   try {
-    const { createOpencode } = await import('@opencode-ai/sdk');
-    const { client } = await createOpencode();
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
 
-    // Create a verification session
-    const session = await client.session.create({
-      body: { title: "Syntropy Startup Verification" }
+    // Use simple double quotes. 
+    // Manual verification confirmed: opencode run "Say hello..." works.
+    const { stdout } = await execAsync('opencode run "Say hello to Syntropy"', {
+      timeout: 60000,
+      maxBuffer: 10 * 1024 * 1024
     });
 
-    // Send a simple prompt
-    const response = await client.session.prompt({
-      path: { id: session.id },
-      body: {
-        model: { providerID: "openai", modelID: "gpt-4o" },
-        parts: [{ type: "text", text: "Say hello" }]
-      }
-    });
-
-    const result = JSON.stringify(response);
-    console.log(`[SYNTROPY] ✅ Opencode SDK verification successful (ResponseLen: ${result.length})`);
-    await logAudit({ type: 'opencode_verified', method: 'sdk', responseLen: result.length });
+    const response = stdout.trim();
+    console.log(`[SYNTROPY] Opencode CLI Response:\n${response}`);
+    await logAudit({ type: 'opencode_verified', method: 'cli', response: response.slice(0, 500) });
     return true;
   } catch (error: any) {
     console.error(`[SYNTROPY] Opencode verification failed: ${error.message}`);

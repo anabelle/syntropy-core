@@ -324,42 +324,49 @@ The response summary should be recorded in your Knowledge Base for future refere
       task: z.string().describe('Detailed technical instruction for Opencode. Be specific about what you want done and any constraints.')
     }),
     execute: async ({ task }) => {
-      console.log(`[SYNTROPY] Delegating to Opencode Agent (SDK): ${task}`);
+      console.log(`[SYNTROPY] Delegating to Opencode Agent (CLI): ${task}`);
       await logAudit({ type: 'opencode_delegation_start', task });
 
       try {
-        // Dynamic import to ensure SDK is available
-        const { createOpencode } = await import('@opencode-ai/sdk');
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
 
-        // Initialize client (this handles connection to Opencode server)
-        const { client } = await createOpencode();
+        // Robust Shell Escaping
+        // 1. Escape backslashes
+        // 2. Escape double quotes (since we wrap in double quotes)
+        // 3. Escape $ and ` to prevent shell expansion
+        const escapedTask = task
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\$/g, '\\$')
+          .replace(/`/g, '\\`');
 
-        // Create a dedicated session for this task
-        // We use a safe title slice
-        const session = await client.session.create({
-          body: { title: `Delegation: ${task.slice(0, 30)}` }
+        // Execute with wrapping quotes
+        const { stdout: output } = await execAsync(`opencode run "${escapedTask}"`, {
+          timeout: 6000000, // 100 minutes max
+          maxBuffer: 100 * 1024 * 1024
         });
 
-        // Execute the prompt using standard OpenAI model
-        const response = await client.session.prompt({
-          path: { id: session.id },
-          body: {
-            model: { providerID: "openai", modelID: "gpt-4o" },
-            parts: [{ type: "text", text: task }]
-          }
-        });
+        // Parse output
+        let summary = output.toString().trim();
 
-        // Convert response to string (JSON) since we don't assume structure yet
-        const result = JSON.stringify(response, null, 2);
+        // Try to filter JSON lines if mixed content
+        const lines = summary.split('\n');
+        const filteredLines = lines.filter((l: string) => !l.startsWith('{') && !l.startsWith('['));
+        if (filteredLines.length > 0) {
+          summary = filteredLines.join('\n');
+        }
 
         console.log('[SYNTROPY] Opencode task completed');
-        await logAudit({ type: 'opencode_delegation_success', summaryLen: result.length });
-        return result;
+        await syncAll(); // Sync code changes
+        await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
+        return { success: true, summary: summary.slice(0, 5000) || "Task completed successfully." };
 
       } catch (error: any) {
         console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
         await logAudit({ type: 'opencode_delegation_error', error: error.message });
-        return `Delegation failed: ${error.message}`;
+        return { error: `Delegation failed: ${error.message}` };
       }
     }
   })
