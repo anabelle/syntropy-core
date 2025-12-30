@@ -300,7 +300,8 @@ async function verifyOpencode(): Promise<boolean> {
     // Manual verification confirmed: opencode run "Say hello..." works.
     // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
     // < /dev/null ensures stdin is closed
-    const { stdout } = await execAsync('opencode run "Say hello to Syntropy" < /dev/null', {
+    // -m flag ensures we use OpenAI instead of defaulting to Google (which may have quota limits)
+    const { stdout } = await execAsync('opencode run -m "openai/gpt-4o-mini" "Say hello to Syntropy" < /dev/null', {
       timeout: 60000,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
