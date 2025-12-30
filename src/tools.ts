@@ -214,7 +214,7 @@ Use 'messages' to see recent conversations, 'reflections' for insights, 'all' fo
         let whereClause: string;
         if (category === 'messages') {
           // Messages don't have content.type set, filter by source if provided
-          whereClause = source 
+          whereClause = source
             ? `content->>'type' IS NULL AND content->>'source' = '${source}'`
             : `content->>'type' IS NULL`;
         } else if (category === 'reflections') {
@@ -222,9 +222,9 @@ Use 'messages' to see recent conversations, 'reflections' for insights, 'all' fo
         } else {
           whereClause = '1=1'; // all
         }
-        
+
         const query = `SELECT id, created_at, content FROM memories WHERE ${whereClause} ORDER BY created_at DESC LIMIT ${limit}`;
-        
+
         const script = `
 const { PGlite } = require('@electric-sql/pglite');
 const db = new PGlite('/app/.eliza/.elizadb');
@@ -240,7 +240,7 @@ db.query(\`${query}\`).then(r => console.log(JSON.stringify(r.rows))).catch(e =>
         }
 
         const results = JSON.parse(stdout.trim());
-        
+
         // Format results based on category
         const memories = results.map((row: any) => {
           const content = row.content || {};
@@ -505,7 +505,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         return new Promise((resolve, reject) => {
           const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
           const cmd = `opencode run ${fileFlags} "${escapedBriefing}" < /dev/null`;
-          
+
           const child = spawn(cmd, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
             shell: true,
@@ -561,6 +561,27 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
         await logAudit({ type: 'opencode_delegation_error', error: error.message });
         return { error: `Delegation failed: ${error.message}` };
+      }
+    }
+  }),
+
+  notifyHuman: tool({
+    description: 'Send a high-priority notification to the human operator. Use this when you are stuck, need a decision, or have a critical breakthrough. It writes to NOTIFICATIONS.md and logs loudly.',
+    inputSchema: z.object({
+      message: z.string().describe('The message for the human. Be concise and actionable.'),
+      priority: z.enum(['low', 'medium', 'high', 'critical']).describe('Priority level.')
+    }),
+    execute: async ({ message, priority }) => {
+      console.log(`[SYNTROPY] 🚨 NOTIFY HUMAN [${priority}]: ${message}`);
+      const notificationPath = path.resolve(PIXEL_ROOT, 'NOTIFICATIONS.md');
+      const entry = `\n## [${new Date().toISOString()}] Priority: ${priority}\n${message}\n`;
+
+      try {
+        await fs.appendFile(notificationPath, entry);
+        await logAudit({ type: 'human_notification', message, priority });
+        return { success: true, file: 'NOTIFICATIONS.md' };
+      } catch (e: any) {
+        return { error: e.message };
       }
     }
   }),
