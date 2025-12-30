@@ -229,10 +229,10 @@ async function verifyOpencode(): Promise<boolean> {
     const { promisify } = require('util');
     const execAsync = promisify(exec);
 
-    // Use simple double quotes. 
     // Manual verification confirmed: opencode run "Say hello..." works.
     // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
-    const { stdout } = await execAsync('opencode run "Say hello to Syntropy"', {
+    // < /dev/null ensures stdin is closed
+    const { stdout } = await execAsync('opencode run "Say hello to Syntropy" < /dev/null', {
       timeout: 60000,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
