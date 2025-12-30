@@ -244,6 +244,43 @@ async function verifyOpencode(): Promise<boolean> {
   }
 }
 
+async function verifyCapabilities(): Promise<{ git: boolean, docker: boolean, opencode: boolean }> {
+  const { exec } = require('child_process');
+  const { promisify } = require('util');
+  const execAsync = promisify(exec);
+
+  const results = { git: false, docker: false, opencode: false };
+
+  // Check GH_TOKEN
+  if (process.env.GH_TOKEN) {
+    console.log('[SYNTROPY] ✅ GH_TOKEN configured - git push enabled');
+    results.git = true;
+  } else {
+    console.warn('[SYNTROPY] ⚠️  GH_TOKEN not set - self-evolution disabled');
+  }
+
+  // Check Docker socket
+  try {
+    await execAsync('docker ps', { timeout: 5000 });
+    console.log('[SYNTROPY] ✅ Docker socket accessible');
+    results.docker = true;
+  } catch (e) {
+    console.warn('[SYNTROPY] ⚠️  Docker socket not accessible - container monitoring disabled');
+  }
+
+  // Check Opencode (non-blocking, quick check)
+  try {
+    await execAsync('which opencode', { timeout: 2000 });
+    console.log('[SYNTROPY] ✅ Opencode CLI found');
+    results.opencode = true;
+  } catch (e) {
+    console.warn('[SYNTROPY] ⚠️  Opencode not found - delegation disabled');
+  }
+
+  await logAudit({ type: 'capabilities_check', results });
+  return results;
+}
+
 async function startup() {
   console.log('[SYNTROPY] ═══════════════════════════════════════');
   console.log('[SYNTROPY] Starting Oversoul with self-scheduling');
@@ -251,13 +288,17 @@ async function startup() {
   console.log(`[SYNTROPY] Fallback interval: ${MAX_INTERVAL_MS / 60000} minutes (max)`);
   console.log(`[SYNTROPY] Minimum interval: ${MIN_INTERVAL_MS / 60000} minutes`);
 
-  // Verify Opencode is available
-  const opencodeReady = await verifyOpencode();
-  if (!opencodeReady) {
-    console.warn('[SYNTROPY] ⚠️  Opencode not available - delegation will fail');
-    console.warn('[SYNTROPY] Continuing without Opencode...');
-  } else {
-    console.log('[SYNTROPY] ✅ Opencode Agent verified and ready');
+  // Quick capability check
+  const caps = await verifyCapabilities();
+
+  // Detailed Opencode verification only if CLI exists
+  if (caps.opencode) {
+    const opencodeReady = await verifyOpencode();
+    if (!opencodeReady) {
+      console.warn('[SYNTROPY] ⚠️  Opencode available but not responding');
+    } else {
+      console.log('[SYNTROPY] ✅ Opencode Agent verified and ready');
+    }
   }
 
   // Run first cycle

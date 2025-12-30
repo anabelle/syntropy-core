@@ -50,11 +50,25 @@ export const syncAll = async () => {
       path.resolve(PIXEL_ROOT, 'syntropy-core')
     ];
 
+    // Configure git for container environment
+    const ghToken = process.env.GH_TOKEN;
+    if (!ghToken) {
+      console.warn('[SYNTROPY] GH_TOKEN not set - git push will fail');
+    }
+
     for (const repo of repos) {
       if (!fs.existsSync(repo)) continue;
       try {
         // Check if it is a git repo
         if (!fs.existsSync(path.join(repo, '.git'))) continue;
+
+        // Mark directory as safe (required when running as different user)
+        await execAsync(`git config --global --add safe.directory ${repo}`, { cwd: repo }).catch(() => { });
+
+        // Configure credential helper for this push if token available
+        if (ghToken) {
+          await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: repo }).catch(() => { });
+        }
 
         await execAsync('git add .', { cwd: repo });
         try {
