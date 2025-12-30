@@ -10,15 +10,22 @@ For a detailed breakdown of Syntropy's purpose and directives, see [VISION.md](.
 
 ## Features
 - **Autonomous Evolution Cycles**: Scheduled analysis and mutation of agent DNA.
+- **Self-Evolution**: Capable of modifying its own code and pushing updates via Git.
 - **Ecosystem Monitoring**: Real-time status tracking of Docker Compose services.
 - **Treasury Management**: Monitoring sat flow in the LNPixels database.
-- **Character Mutation**: Programmatic refactoring of agent character files.
+- **Opencode Integration**: Delegate complex coding tasks to the Opencode AI Agent.
+
+## Setup & Permissions
+Syntropy requires:
+- `GH_TOKEN`: GitHub PAT (repo scope) for self-evolution.
+- `OPENAI_API_KEY`: For the Intelligence Engine.
+- Docker socket access (mounted automatically).
+- Write access to the repository root.
 
 ## Tech Stack
 - **Runtime**: Bun
 - **Intelligence**: AI SDK (OpenAI gpt-4o-mini)
-- **Persistence**: SQLite (direct access to `pixels.db` and `activity.db`)
-- **Process Management**: Docker Compose
+- **Deployment**: Docker Compose with Nginx Reverse Proxy
 
 ## License
 MIT
