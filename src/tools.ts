@@ -264,21 +264,45 @@ export const tools = {
   }),
 
   writeEvolutionReport: tool({
-    description: 'Write an evolution report and manifest monologue to the web front-end.',
+    description: `Write an evolution report. Use sparingly - only for significant events:
+- Successful code mutations or fixes
+- Critical errors discovered and resolved  
+- Major architectural decisions
+- Treasury milestones (e.g., crossed 100k sats)
+Do NOT write reports for routine health checks or status updates.`,
     inputSchema: z.object({
       content: z.string().describe('Markdown content of the report'),
-      title: z.string().describe('Title of the evolution phase')
+      title: z.string().describe('Title of the evolution phase'),
+      significance: z.enum(['critical', 'major', 'minor']).describe('How significant is this report? critical=must record, major=important milestone, minor=routine (avoid)')
     }),
-    execute: async ({ content, title }) => {
-      console.log(`[SYNTROPY] Tool: writeEvolutionReport (${title})`);
-      await logAudit({ type: 'evolution_report', title });
+    execute: async ({ content, title, significance }) => {
+      // Skip minor reports to reduce bloat
+      if (significance === 'minor') {
+        console.log(`[SYNTROPY] Skipping minor evolution report: ${title}`);
+        return { success: true, skipped: true, reason: 'Minor reports are not persisted to reduce bloat' };
+      }
+
+      console.log(`[SYNTROPY] Tool: writeEvolutionReport (${title}) [${significance}]`);
+      await logAudit({ type: 'evolution_report', title, significance });
       try {
         const reportDir = isDocker
           ? path.resolve(PIXEL_ROOT, 'audit/evolution')
           : path.resolve(PIXEL_ROOT, 'docs/evolution');
         await fs.ensureDir(reportDir);
-        const filename = `${Date.now()}-${title.toLowerCase().replace(/\s+/g, '-')}.md`;
+        const filename = `${Date.now()}-${title.toLowerCase().replace(/\\s+/g, '-')}.md`;
         await fs.writeFile(path.resolve(reportDir, filename), content);
+
+        // Auto-prune: Keep only the last 10 reports
+        const MAX_REPORTS = 10;
+        const files = await fs.readdir(reportDir);
+        const mdFiles = files.filter(f => f.endsWith('.md')).sort();
+        if (mdFiles.length > MAX_REPORTS) {
+          const toDelete = mdFiles.slice(0, mdFiles.length - MAX_REPORTS);
+          for (const file of toDelete) {
+            await fs.remove(path.resolve(reportDir, file));
+            console.log(`[SYNTROPY] Pruned old evolution report: ${file}`);
+          }
+        }
 
         const syntropyJsonPath = isDocker
           ? path.resolve(PIXEL_ROOT, 'audit/syntropy.json')
@@ -288,6 +312,7 @@ export const tools = {
           lastUpdate: new Date().toISOString(),
           title,
           content,
+          significance,
           status: 'EVOLUTION_STEP_COMPLETE'
         });
         return { success: true };
