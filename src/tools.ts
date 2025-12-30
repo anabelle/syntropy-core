@@ -341,7 +341,8 @@ The response summary should be recorded in your Knowledge Base for future refere
         return new Promise((resolve, reject) => {
           const child = spawn(`opencode run "${task.replace(/"/g, '\\"')}" < /dev/null`, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
-            shell: true
+            shell: true,
+            cwd: PIXEL_ROOT
           });
 
           let fullOutput = '';

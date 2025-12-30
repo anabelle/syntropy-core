@@ -14,13 +14,13 @@ RUN curl -fsSL https://opencode.ai/install | bash \
     && chmod +x /usr/local/bin/opencode
 
 # Copy package files
-COPY package.json bun.lock* ./
+COPY --chown=bun:bun package.json bun.lock* ./
 
 # Install dependencies
 RUN bun install
 
 # Copy source
-COPY . .
+COPY --chown=bun:bun . .
 
 # Run directly
 CMD ["bun", "src/index.ts"]
