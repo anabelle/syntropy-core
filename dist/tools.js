@@ -204,6 +204,52 @@ export const tools = {
             }
         }
     }),
+    readPixelInsights: tool({
+        description: `Read Pixel's self-reflection insights and learnings from the agent's memory database.
+This tool queries Pixel's PGLite database for structured reflection data that Pixel generates
+through its self-reflection engine. Use this to understand:
+- What Pixel has learned from interactions (agent_learning)
+- Self-reflection analysis with strengths/weaknesses (self_reflection)  
+- Life milestones and narrative evolution (life_milestone)
+This enables the feedback loop: Pixel learns → Syntropy reads insights → evolves character → Pixel grows.`,
+        inputSchema: z.object({
+            type: z.enum(['self_reflection', 'life_milestone', 'agent_learning', 'all']).describe('Type of insights to retrieve'),
+            limit: z.number().optional().describe('Maximum number of results (default: 5)')
+        }),
+        execute: async ({ type, limit = 5 }) => {
+            console.log(`[SYNTROPY] Tool: readPixelInsights (type=${type}, limit=${limit})`);
+            try {
+                // Query Pixel's embedded PGLite database via docker exec
+                const typeFilter = type === 'all'
+                    ? "content->>'type' IN ('self_reflection', 'life_milestone', 'agent_learning')"
+                    : `content->>'type' = '${type}'`;
+                const query = `SELECT id, created_at, content FROM memories WHERE ${typeFilter} ORDER BY created_at DESC LIMIT ${limit}`;
+                const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+db.query(\`${query}\`).then(r => console.log(JSON.stringify(r.rows))).catch(e => console.error('ERROR:', e.message));
+`;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
+                if (stderr && stderr.includes('ERROR:')) {
+                    return { error: stderr };
+                }
+                const results = JSON.parse(stdout.trim());
+                // Extract key insights for Syntropy consumption
+                const insights = results.map((row) => ({
+                    id: row.id,
+                    createdAt: row.created_at,
+                    type: row.content?.type,
+                    data: row.content?.data || row.content
+                }));
+                await logAudit({ type: 'pixel_insights_read', insightType: type, count: insights.length });
+                return { insights, count: insights.length };
+            }
+            catch (error) {
+                await logAudit({ type: 'pixel_insights_error', error: error.message });
+                return { error: `Failed to read Pixel insights: ${error.message}` };
+            }
+        }
+    }),
     readCharacterFile: tool({
         description: 'Read a specific part of Pixel\'s character DNA',
         inputSchema: z.object({
