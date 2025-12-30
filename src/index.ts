@@ -15,7 +15,25 @@ const MIN_INTERVAL_MS = 10 * 60 * 1000;      // 10 minutes minimum
 const MAX_INTERVAL_MS = 6 * 60 * 60 * 1000;  // 6 hours maximum (fallback)
 const DEFAULT_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours default
 
+// Runtime safety controls for the main loop
 let nextRunTimeout: NodeJS.Timeout | null = null;
+let runningCycle = false;
+let consecutiveFailures = 0;
+const MAX_CONSECUTIVE_FAILURES = parseInt(process.env.MAX_CONSECUTIVE_FAILURES || '3', 10);
+const CIRCUIT_BREAKER_DELAY_MINUTES = parseInt(process.env.CIRCUIT_BREAKER_DELAY_MINUTES || '60', 10);
+
+function redactSecrets(text: string) {
+  if (!text || typeof text !== 'string') return text;
+  const secrets = ['GH_TOKEN', 'DB_PASSWORD', 'SECRET_SALT', 'API_KEY', 'TOKEN', 'PASSWORD'];
+  let out = text;
+  for (const k of secrets) {
+    const v = process.env[k as keyof NodeJS.ProcessEnv];
+    if (v && typeof v === 'string' && v.length > 0) {
+      out = out.split(v).join('[REDACTED]');
+    }
+  }
+  return out;
+}
 
 interface ScheduleData {
   nextRunAt: string;
@@ -109,6 +127,13 @@ OPERATIONAL PROTOCOLS:
 });
 
 async function runAutonomousCycle() {
+  if (runningCycle) {
+    console.warn('[SYNTROPY] Another cycle is already running - skipping this invocation');
+    await logAudit({ type: 'cycle_skipped', reason: 'overlapping_cycle' });
+    return;
+  }
+
+  runningCycle = true;
   console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${MODEL_NAME}`);
   await logAudit({ type: 'cycle_start', model: MODEL_NAME });
 
@@ -137,6 +162,7 @@ async function runAutonomousCycle() {
               }
 
               let summary = '';
+              let argsSummary = '';
               try {
                 const rawResult = tr.result || tr.output;
                 if (typeof rawResult === 'string') {
@@ -146,6 +172,19 @@ async function runAutonomousCycle() {
                 } else {
                   summary = 'No result returned';
                 }
+
+                const rawArgs = tr.args || tr.input;
+                if (rawArgs !== undefined && rawArgs !== null) {
+                  try {
+                    argsSummary = JSON.stringify(rawArgs).slice(0, 500);
+                  } catch (_e) {
+                    argsSummary = String(rawArgs).slice(0, 200);
+                  }
+                }
+
+                // redact known environment secrets from output
+                summary = redactSecrets(summary);
+                argsSummary = redactSecrets(argsSummary);
               } catch (e) {
                 summary = 'Error stringifying result';
               }
@@ -154,7 +193,8 @@ async function runAutonomousCycle() {
                 type: 'tool_result',
                 tool: tr.toolName,
                 success: !tr.isError,
-                summary
+                summary,
+                args: argsSummary
               });
             }
           }
@@ -175,18 +215,35 @@ async function runAutonomousCycle() {
       }))
     });
 
-    console.log('\n--- SYNTROPY OUTPUT ---\n', result.text, '\n-----------------------\n');
+    console.log('\n--- SYNTROPY OUTPUT ---\n', result.text.slice(0, 2000), '\n-----------------------\n');
 
-    // Auto-sync all repos at end of cycle
-    const { syncAll } = await import('./utils');
-    await syncAll();
+    // Auto-sync all repos at end of cycle (opt-in via AUTONOMOUS_SYNC=true)
+    if (process.env.AUTONOMOUS_SYNC === 'true') {
+      const { syncAll } = await import('./utils');
+      await syncAll();
+    } else {
+      await logAudit({ type: 'auto_sync_skipped', reason: 'AUTONOMOUS_SYNC not enabled' });
+    }
+
+    // Reset consecutive failures on success
+    consecutiveFailures = 0;
   } catch (error: any) {
     console.error('Syntropy Cycle Failed:', error);
     await logAudit({ type: 'cycle_error', error: error.message });
-  }
+    consecutiveFailures += 1;
+    await logAudit({ type: 'consecutive_failure', count: consecutiveFailures });
 
-  // Schedule next run
-  scheduleNextCycle();
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      const delayMs = CIRCUIT_BREAKER_DELAY_MINUTES * 60 * 1000;
+      await setNextScheduledRun(delayMs, 'circuit breaker engaged due to repeated cycle failures');
+      await logAudit({ type: 'circuit_breaker_engaged', count: consecutiveFailures, delayMs });
+      console.warn(`[SYNTROPY] Circuit breaker engaged. Pausing cycles for ${CIRCUIT_BREAKER_DELAY_MINUTES} minutes.`);
+    }
+  } finally {
+    runningCycle = false;
+    // Schedule next run (which will apply backoff based on consecutiveFailures)
+    scheduleNextCycle();
+  }
 }
 
 async function scheduleNextCycle() {
@@ -213,6 +270,13 @@ async function scheduleNextCycle() {
       delayMs = MIN_INTERVAL_MS;
       reason = 'past due, catching up';
     }
+  }
+
+  // Apply exponential backoff if recent consecutive failures
+  if (consecutiveFailures > 0) {
+    const backoffFactor = Math.pow(2, Math.max(0, consecutiveFailures - 1));
+    delayMs = Math.min(MAX_INTERVAL_MS, Math.round(delayMs * backoffFactor));
+    reason = `${reason}; backoff x${backoffFactor} due to ${consecutiveFailures} consecutive failures`;
   }
 
   // Clamp to bounds

@@ -4,7 +4,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, OPENCODE_LIVE_LOG } from './config';
+import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, OPENCODE_LIVE_LOG, AUDIT_LOG_PATH } from './config';
 import { logAudit, syncAll } from './utils';
 const execAsync = promisify(exec);
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
@@ -538,6 +538,37 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
                 console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
                 await logAudit({ type: 'opencode_delegation_error', error: error.message });
                 return { error: `Delegation failed: ${error.message}` };
+            }
+        }
+    }),
+    readAudit: tool({
+        description: 'Read recent entries from the Syntropy audit log for self-awareness and historical analysis. Reads the most recent entries by default.',
+        inputSchema: z.object({
+            lines: z.number().optional().describe('Number of recent audit entries to read (default: 50, max: 500)')
+        }),
+        execute: async ({ lines = 50 }) => {
+            console.log(`[SYNTROPY] Tool: readAudit (${lines} entries)`);
+            try {
+                if (!fs.existsSync(AUDIT_LOG_PATH)) {
+                    return "Audit log not found.";
+                }
+                const content = await fs.readFile(AUDIT_LOG_PATH, 'utf-8');
+                const auditLines = content.trim().split('\n').filter(line => line.trim());
+                // Parse and get the most recent entries
+                const maxLines = Math.min(Math.max(lines, 1), 500);
+                const recentEntries = auditLines.slice(-maxLines).map(line => {
+                    try {
+                        return JSON.parse(line);
+                    }
+                    catch (e) {
+                        return { parse_error: line.substring(0, 100) + '...' };
+                    }
+                });
+                await logAudit({ type: 'audit_read', entries_requested: lines, entries_returned: recentEntries.length });
+                return recentEntries;
+            }
+            catch (error) {
+                return { error: error.message };
             }
         }
     })
