@@ -176,6 +176,10 @@ async function runAutonomousCycle() {
     });
 
     console.log('\n--- SYNTROPY OUTPUT ---\n', result.text, '\n-----------------------\n');
+
+    // Auto-sync all repos at end of cycle
+    const { syncAll } = await import('./utils');
+    await syncAll();
   } catch (error: any) {
     console.error('Syntropy Cycle Failed:', error);
     await logAudit({ type: 'cycle_error', error: error.message });
