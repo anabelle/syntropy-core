@@ -504,7 +504,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
 
         return new Promise((resolve, reject) => {
           const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
-          const cmd = `opencode run -m "openai/gpt-4o" ${fileFlags} "${escapedBriefing}" < /dev/null`;
+          const cmd = `opencode run -m "opencode/glm-4.7-free" ${fileFlags} "${escapedBriefing}" < /dev/null`;
 
           const child = spawn(cmd, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
