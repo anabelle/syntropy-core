@@ -356,15 +356,38 @@ The response summary should be recorded in your Knowledge Base for future refere
       try {
         const { spawn } = require('child_process');
 
+        // Build context briefing for the dumber model
+        const briefing = `
+CONTEXT BRIEFING (Read AGENTS.md for full ops reference):
+- You are in the Pixel monorepo at /pixel
+- Architecture: Docker Compose with services: agent (ElizaOS on :3003), api (:3000), web (:3002), landing (:3001), postgres (:5432), syntropy, nginx
+- Agent runtime: Bun + ElizaOS CLI, PostgreSQL database
+- Key commands: docker compose [ps|logs|restart|up -d --build] <service>
+- Health check: curl http://localhost:3003/health
+- Character rebuild: docker compose run --rm agent bun run build:character
+- Current state: Read CONTINUITY.md for active tasks and known issues
+
+YOUR TASK: ${task}
+
+Execute this task. Read relevant files first if needed. Use docker compose commands for container ops.`;
+
         // Ensure log directory exists
         await fs.ensureDir(path.dirname(OPENCODE_LIVE_LOG));
         const logStream = fs.createWriteStream(OPENCODE_LIVE_LOG, { flags: 'a' });
 
         const timestamp = new Date().toISOString();
-        logStream.write(`\n--- DELEGATION START: ${timestamp} ---\nTASK: ${task}\n\n`);
+        logStream.write(`\n--- DELEGATION START: ${timestamp} ---\nTASK: ${task}\nBRIEFING INJECTED: yes\n\n`);
+
+        // Attach key context files so Opencode can read them
+        const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
+        const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
+        const fileFlags = `--file ${agentsMdPath} --file ${continuityPath}`;
 
         return new Promise((resolve, reject) => {
-          const child = spawn(`opencode run "${task.replace(/"/g, '\\"')}" < /dev/null`, [], {
+          const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
+          const cmd = `opencode run ${fileFlags} "${escapedBriefing}" < /dev/null`;
+          
+          const child = spawn(cmd, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
             shell: true,
             cwd: PIXEL_ROOT
