@@ -204,26 +204,38 @@ export const tools = {
             }
         }
     }),
-    readPixelInsights: tool({
-        description: `Read Pixel's self-reflection insights and learnings from the agent's memory database.
-This tool queries Pixel's PGLite database for structured reflection data that Pixel generates
-through its self-reflection engine. Use this to understand:
-- What Pixel has learned from interactions (agent_learning)
-- Self-reflection analysis with strengths/weaknesses (self_reflection)  
-- Life milestones and narrative evolution (life_milestone)
-This enables the feedback loop: Pixel learns → Syntropy reads insights → evolves character → Pixel grows.`,
+    readPixelMemories: tool({
+        description: `Read Pixel's memories from the embedded PGLite database.
+ElizaOS stores all data in PGLite (embedded PostgreSQL) at /app/.eliza/.elizadb/ inside the agent container.
+The 'memories' table contains ALL agent data with different content types:
+- messages: Regular conversation messages (content.source = telegram/nostr/etc)
+- self_reflection: Periodic self-analysis with strengths/weaknesses (content.type = 'self_reflection')
+- life_milestone: Narrative evolution and phase changes (content.type = 'life_milestone')
+- agent_learning: Individual learnings extracted from reflections (content.type = 'agent_learning')
+Use 'messages' to see recent conversations, 'reflections' for insights, 'all' for everything.`,
         inputSchema: z.object({
-            type: z.enum(['self_reflection', 'life_milestone', 'agent_learning', 'all']).describe('Type of insights to retrieve'),
-            limit: z.number().optional().describe('Maximum number of results (default: 5)')
+            category: z.enum(['messages', 'reflections', 'all']).describe('Category: messages (conversations), reflections (self_reflection/life_milestone/agent_learning), or all'),
+            limit: z.number().optional().describe('Maximum number of results (default: 10)'),
+            source: z.string().optional().describe('Filter by source (telegram, nostr) - only for messages category')
         }),
-        execute: async ({ type, limit = 5 }) => {
-            console.log(`[SYNTROPY] Tool: readPixelInsights (type=${type}, limit=${limit})`);
+        execute: async ({ category, limit = 10, source }) => {
+            console.log(`[SYNTROPY] Tool: readPixelMemories (category=${category}, limit=${limit}, source=${source || 'any'})`);
             try {
-                // Query Pixel's embedded PGLite database via docker exec
-                const typeFilter = type === 'all'
-                    ? "content->>'type' IN ('self_reflection', 'life_milestone', 'agent_learning')"
-                    : `content->>'type' = '${type}'`;
-                const query = `SELECT id, created_at, content FROM memories WHERE ${typeFilter} ORDER BY created_at DESC LIMIT ${limit}`;
+                // Build query based on category
+                let whereClause;
+                if (category === 'messages') {
+                    // Messages don't have content.type set, filter by source if provided
+                    whereClause = source
+                        ? `content->>'type' IS NULL AND content->>'source' = '${source}'`
+                        : `content->>'type' IS NULL`;
+                }
+                else if (category === 'reflections') {
+                    whereClause = `content->>'type' IN ('self_reflection', 'life_milestone', 'agent_learning')`;
+                }
+                else {
+                    whereClause = '1=1'; // all
+                }
+                const query = `SELECT id, created_at, content FROM memories WHERE ${whereClause} ORDER BY created_at DESC LIMIT ${limit}`;
                 const script = `
 const { PGlite } = require('@electric-sql/pglite');
 const db = new PGlite('/app/.eliza/.elizadb');
@@ -234,19 +246,68 @@ db.query(\`${query}\`).then(r => console.log(JSON.stringify(r.rows))).catch(e =>
                     return { error: stderr };
                 }
                 const results = JSON.parse(stdout.trim());
-                // Extract key insights for Syntropy consumption
-                const insights = results.map((row) => ({
-                    id: row.id,
-                    createdAt: row.created_at,
-                    type: row.content?.type,
-                    data: row.content?.data || row.content
-                }));
-                await logAudit({ type: 'pixel_insights_read', insightType: type, count: insights.length });
-                return { insights, count: insights.length };
+                // Format results based on category
+                const memories = results.map((row) => {
+                    const content = row.content || {};
+                    if (category === 'messages' || !content.type) {
+                        // Message format: show conversation flow
+                        return {
+                            id: row.id,
+                            createdAt: row.created_at,
+                            source: content.source,
+                            text: content.text?.substring(0, 800),
+                            isReply: !!content.inReplyTo,
+                            thought: content.thought?.substring(0, 800)
+                        };
+                    }
+                    else {
+                        // Reflection format: show insights
+                        return {
+                            id: row.id,
+                            createdAt: row.created_at,
+                            type: content.type,
+                            data: content.data || content
+                        };
+                    }
+                });
+                await logAudit({ type: 'pixel_memories_read', category, count: memories.length });
+                return { memories, count: memories.length, category };
             }
             catch (error) {
-                await logAudit({ type: 'pixel_insights_error', error: error.message });
-                return { error: `Failed to read Pixel insights: ${error.message}` };
+                await logAudit({ type: 'pixel_memories_error', error: error.message });
+                return { error: `Failed to read Pixel memories: ${error.message}` };
+            }
+        }
+    }),
+    getPixelStats: tool({
+        description: "Get statistics about Pixel's memory database - total memories, sources, reflection counts.",
+        inputSchema: z.object({}),
+        execute: async () => {
+            console.log('[SYNTROPY] Tool: getPixelStats');
+            try {
+                const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+Promise.all([
+  db.query("SELECT COUNT(*) as total FROM memories"),
+  db.query("SELECT content->>'source' as source, COUNT(*) as count FROM memories WHERE content->>'type' IS NULL GROUP BY content->>'source'"),
+  db.query("SELECT content->>'type' as type, COUNT(*) as count FROM memories WHERE content->>'type' IS NOT NULL GROUP BY content->>'type'")
+]).then(([total, sources, types]) => console.log(JSON.stringify({
+  totalMemories: total.rows[0]?.total || 0,
+  messagesBySource: sources.rows,
+  reflectionsByType: types.rows
+}))).catch(e => console.error('ERROR:', e.message));
+`;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
+                if (stderr && stderr.includes('ERROR:')) {
+                    return { error: stderr };
+                }
+                const stats = JSON.parse(stdout.trim());
+                await logAudit({ type: 'pixel_stats', ...stats });
+                return stats;
+            }
+            catch (error) {
+                return { error: `Failed to get Pixel stats: ${error.message}` };
             }
         }
     }),
