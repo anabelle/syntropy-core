@@ -7,7 +7,7 @@ import * as path from 'path';
 dotenv.config({ path: path.resolve('../pixel-agent/.env') });
 
 const agent = new ToolLoopAgent({
-  model: openai('gpt-4o-mini'),
+  model: openai('gpt-5-mini'),
   instructions: 'You are a test agent.',
   tools: {
     hello: tool({

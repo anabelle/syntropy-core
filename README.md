@@ -19,7 +19,7 @@ State tracking is maintained in the root [CONTINUITY.md](../CONTINUITY.md).
 
 ## Current Stack (December 2025)
 - **Runtime**: Bun v1.3+
-- **Intelligence**: AI SDK (OpenAI gpt-4o-mini)
+- **Intelligence**: AI SDK (OpenAI gpt-5-mini)
 - **Agent Framework**: ElizaOS v1.6.2 with CLI v1.7.0
 - **Database**: Embedded PGLite (PostgreSQL 17) at `/app/.eliza/.elizadb/`
 - **Deployment**: Docker Compose with Nginx Reverse Proxy
