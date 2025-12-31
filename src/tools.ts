@@ -645,5 +645,189 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         return { error: `Failed to signal agent bridge: ${error.message}` };
       }
     }
+  }),
+
+  readPixelNostrFeed: tool({
+    description: 'Read the most recent posts from the Pixel agent on Nostr. Use this to see what Pixel has been saying recently.',
+    inputSchema: z.object({
+      limit: z.number().optional().default(5).describe('Number of recent posts to fetch')
+    }),
+    execute: async ({ limit }) => {
+      console.log(`[SYNTROPY] Tool: readPixelNostrFeed (limit=${limit})`);
+      try {
+        const script = `
+const { poolList } = require('/app/plugin-nostr/lib/poolList.js');
+const { SimplePool, nip19, getPublicKey } = require('nostr-tools');
+const WebSocket = require('ws');
+global.WebSocket = WebSocket;
+
+async function run() {
+  const sk = process.env.NOSTR_PRIVATE_KEY;
+  const relays = (process.env.NOSTR_RELAYS || '').split(',');
+  if (!sk || !relays.length) {
+    console.log('[]');
+    process.exit(0);
+  }
+  
+  let pk = '';
+  try {
+    if (sk.startsWith('nsec')) {
+      pk = getPublicKey(nip19.decode(sk).data);
+    } else {
+      pk = getPublicKey(Buffer.from(sk, 'hex'));
+    }
+  } catch (e) {
+    console.error('ERROR: Invalid key');
+    process.exit(1);
+  }
+
+  const pool = new SimplePool();
+  try {
+    const posts = await poolList(pool, relays, [{ authors: [pk], kinds: [1], limit: ${limit} }]);
+    console.log(JSON.stringify(posts.sort((a, b) => b.created_at - a.created_at)));
+  } finally {
+    try { pool.close(relays); } catch (e) {}
+    process.exit(0);
+  }
+}
+run();
+`;
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const posts = JSON.parse(stdout.trim());
+        await logAudit({ type: 'pixel_nostr_feed_read', count: posts.length });
+        return { posts };
+      } catch (error: any) {
+        return { error: `Failed to read Pixel Nostr feed: ${error.message}` };
+      }
+    }
+  }),
+
+  readNostrThread: tool({
+    description: 'Read a specific Nostr post and its replies. Use this to follow a conversation thread.',
+    inputSchema: z.object({
+      postId: z.string().describe('The post ID (hex or note1)'),
+      limit: z.number().optional().default(20).describe('Max number of replies to fetch')
+    }),
+    execute: async ({ postId, limit }) => {
+      console.log(`[SYNTROPY] Tool: readNostrThread (postId=${postId})`);
+      try {
+        const script = `
+const { poolList } = require('/app/plugin-nostr/lib/poolList.js');
+const { SimplePool, nip19 } = require('nostr-tools');
+const WebSocket = require('ws');
+global.WebSocket = WebSocket;
+
+async function run() {
+  const relays = (process.env.NOSTR_RELAYS || '').split(',');
+  let targetId = '${postId}';
+  if (targetId.startsWith('note1')) {
+    try {
+      targetId = nip19.decode(targetId).data;
+    } catch (e) {}
+  }
+  
+  const pool = new SimplePool();
+  try {
+    const roots = await poolList(pool, relays, [{ ids: [targetId] }]);
+    const root = roots[0] || null;
+    const replies = await poolList(pool, relays, [{ '#e': [targetId], kinds: [1], limit: ${limit} }]);
+    console.log(JSON.stringify({
+      root,
+      replies: replies.sort((a, b) => a.created_at - b.created_at)
+    }));
+  } finally {
+    try { pool.close(relays); } catch (e) {}
+    process.exit(0);
+  }
+}
+run();
+`;
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const thread = JSON.parse(stdout.trim());
+        await logAudit({ type: 'nostr_thread_read', postId, replyCount: thread.replies.length });
+        return thread;
+      } catch (error: any) {
+        return { error: `Failed to read Nostr thread: ${error.message}` };
+      }
+    }
+  }),
+
+  readPixelNostrMentions: tool({
+    description: "Read recent mentions of the Pixel agent on Nostr. Use this to see what people are saying to or about Pixel.",
+    inputSchema: z.object({
+      limit: z.number().optional().default(10).describe('Number of recent mentions to fetch')
+    }),
+    execute: async ({ limit }) => {
+      console.log(`[SYNTROPY] Tool: readPixelNostrMentions (limit=${limit})`);
+      try {
+        const script = `
+const { poolList } = require('/app/plugin-nostr/lib/poolList.js');
+const { SimplePool, nip19, getPublicKey } = require('nostr-tools');
+const WebSocket = require('ws');
+global.WebSocket = WebSocket;
+
+async function run() {
+  const sk = process.env.NOSTR_PRIVATE_KEY;
+  const relays = (process.env.NOSTR_RELAYS || '').split(',');
+  if (!sk || !relays.length) {
+    console.log('[]');
+    process.exit(0);
+  }
+  
+  let pk = '';
+  try {
+    if (sk.startsWith('nsec')) {
+      pk = getPublicKey(nip19.decode(sk).data);
+    } else {
+      pk = getPublicKey(Buffer.from(sk, 'hex'));
+    }
+  } catch (e) {
+    console.error('ERROR: Invalid key');
+    process.exit(1);
+  }
+
+  const pool = new SimplePool();
+  try {
+    const mentions = await poolList(pool, relays, [{ '#p': [pk], kinds: [1], limit: ${limit} }]);
+    console.log(JSON.stringify(mentions.sort((a, b) => b.created_at - a.created_at)));
+  } finally {
+    try { pool.close(relays); } catch (e) {}
+    process.exit(0);
+  }
+}
+run();
+`;
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const mentions = JSON.parse(stdout.trim());
+        await logAudit({ type: 'pixel_nostr_mentions_read', count: mentions.length });
+        return { mentions };
+      } catch (error: any) {
+        return { error: `Failed to read Pixel mentions: ${error.message}` };
+      }
+    }
   })
 };
