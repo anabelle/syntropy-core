@@ -11,8 +11,7 @@ import {
   DB_PATH,
   LOG_PATH,
   OPENCODE_LIVE_LOG,
-  AUDIT_LOG_PATH,
-  OPENCODE_MODEL
+  AUDIT_LOG_PATH
 } from './config';
 import { logAudit, syncAll } from './utils';
 
@@ -505,7 +504,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
 
         return new Promise((resolve, reject) => {
           const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
-          const cmd = `opencode run -m "${OPENCODE_MODEL}" ${fileFlags} "${escapedBriefing}" < /dev/null`;
+          const cmd = `opencode run -m openai/gpt-5-mini "${escapedBriefing}" ${fileFlags} < /dev/null`;
 
           const child = spawn(cmd, [], {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
@@ -616,35 +615,6 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         return recentEntries;
       } catch (error: any) {
         return { error: error.message };
-      }
-    }
-  }),
-
-  postToNostr: tool({
-    description: 'Post a message to Nostr as Pixel. Use this to make announcements, share thoughts, or interact with the community.',
-    inputSchema: z.object({
-      content: z.string().describe('The content of the note to post to Nostr.')
-    }),
-    execute: async ({ content }) => {
-      console.log(`[SYNTROPY] Tool: postToNostr`);
-      try {
-        // Safe quote escaping for bash
-        const escapedContent = content.replace(/'/g, "'\\''");
-
-        const { stdout, stderr } = await execAsync(
-          `docker exec pixel-agent-1 bun scripts/manual-post.ts '${escapedContent}'`,
-          { timeout: 30000 }
-        );
-
-        if (stderr && stderr.includes('Error:')) {
-          return { error: stderr };
-        }
-
-        await logAudit({ type: 'nostr_post', content });
-        return { success: true, output: stdout.trim() };
-      } catch (error: any) {
-        await logAudit({ type: 'nostr_post_error', error: error.message });
-        return { error: `Failed to post to Nostr: ${error.message}` };
       }
     }
   })

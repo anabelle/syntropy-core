@@ -297,12 +297,11 @@ async function verifyOpencode(): Promise<boolean> {
     const { promisify } = require('util');
     const execAsync = promisify(exec);
 
-    // Manual verification confirmed: opencode run "Say hello..." works.
+    // Use explicit model flag for faster, reliable verification
     // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
     // < /dev/null ensures stdin is closed
-    // -m flag ensures we use OpenAI instead of defaulting to Google (which may have quota limits)
-    const { stdout } = await execAsync('opencode run -m "openai/gpt-5-mini" "Say hello to Syntropy" < /dev/null', {
-      timeout: 60000,
+    const { stdout } = await execAsync('opencode run -m openai/gpt-5-mini "Say hello to Syntropy" < /dev/null', {
+      timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
     });
