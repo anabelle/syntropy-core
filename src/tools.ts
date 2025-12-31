@@ -513,15 +513,19 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
           });
 
           let fullOutput = '';
+          let runBuffer = '';
+          const MAX_BUFFER = 5000;
 
           child.stdout.on('data', (data: any) => {
             const str = data.toString();
             fullOutput += str;
+            runBuffer = (runBuffer + str).slice(-MAX_BUFFER);
             logStream.write(str);
           });
 
           child.stderr.on('data', (data: any) => {
             const str = data.toString();
+            runBuffer = (runBuffer + `[STDERR] ${str}`).slice(-MAX_BUFFER);
             logStream.write(`[STDERR] ${str}`);
           });
 
@@ -543,7 +547,8 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
               await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
               resolve({ success: true, summary: summary.slice(0, 5000) || "Task completed successfully." });
             } else {
-              const errorMsg = `Opencode exited with code ${code}`;
+              const errorContext = runBuffer.slice(-2000); // Get last 2000 chars of context
+              const errorMsg = `Opencode exited with code ${code}. Context:\n${errorContext}`;
               console.error(`[SYNTROPY] Opencode delegation failed: ${errorMsg}`);
               await logAudit({ type: 'opencode_delegation_error', error: errorMsg });
               resolve({ error: `Delegation failed: ${errorMsg}` });
