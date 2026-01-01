@@ -128,6 +128,11 @@ LEARN FROM EVERYWHERE:
 - Community feedback → direct signals of value
 - Your own experiments → what mutations succeed or fail
 - Your own audit log → learn from past cycles, avoid repeated mistakes
+- **The Web** → use 'delegateToOpencode' to search for latest docs, solutions, trends
+  - Verify assumptions before implementing
+  - Research best practices
+  - Stay updated on ElizaOS, Nostr, Lightning developments
+  - Don't operate in isolation - draw from global knowledge
 
 MEASURE SUCCESS BY:
 - 📈 Treasury growth (sats stacked)
