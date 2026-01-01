@@ -9,7 +9,7 @@ const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 export const PIXEL_ROOT = process.env.PIXEL_ROOT || (isDocker ? '/app' : path.resolve('..'));
 export const PIXEL_AGENT_DIR = process.env.PIXEL_AGENT_DIR || path.resolve(PIXEL_ROOT, 'pixel-agent');
 // Model Selection: Primary intelligence for orchestration (Use stable model for tool loops)
-export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gpt-5-mini-mini';
+export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gpt-5-mini';
 export const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
 export const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 // Database and log paths
@@ -25,3 +25,5 @@ if (!fs.existsSync(auditDir)) {
 // Ensure API Key presence for OpenRouter/OpenAI
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+// Opencode Delegation Model
+export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7-free';

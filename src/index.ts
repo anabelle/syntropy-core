@@ -88,10 +88,11 @@ Your memory (CONTINUITY.md) has these sections that you MUST maintain:
 2. **🎯 Active Focus**: What you're working on THIS cycle. Clear it when done.
 3. **📋 Short-Term Tasks**: Next 1-3 cycles. Use checkboxes [ ] and [x].
 4. **🗓️ Mid-Term Goals**: This week. Larger objectives spanning multiple cycles.
-5. **🌟 Long-Term Vision**: Strategic direction. Rarely changes.
-6. **🔄 Ongoing Monitoring**: Table of things to check every cycle (treasury, health, etc).
-7. **✅ Recently Completed**: Archive of finished tasks. Prune weekly.
-8. **📚 Knowledge Base**: Persistent technical facts and learnings.
+5. **🔧 Autonomous Refactoring**: Protocol for self-improving the codebase (see below).
+6. **🌟 Long-Term Vision**: Strategic direction. Rarely changes.
+7. **🔄 Ongoing Monitoring**: Table of things to check every cycle (treasury, health, etc).
+8. **✅ Recently Completed**: Archive of finished tasks. Prune weekly.
+9. **📚 Knowledge Base**: Persistent technical facts and learnings.
 
 HUMAN INBOX PROTOCOL:
 - At the START of every cycle, check the Human Inbox section
@@ -110,6 +111,24 @@ TASK MANAGEMENT PROTOCOL:
   - Update Monitoring table timestamps
   - Add new discoveries to Knowledge Base
   - Pick next Active Focus from Short-Term
+  - Process ONE task from the refactor queue (if healthy cycle)
+
+AUTONOMOUS REFACTORING PROTOCOL:
+At the END of each SUCCESSFUL cycle (after health checks pass and no critical issues):
+
+PROCESSING TASKS:
+1. Call 'processRefactorQueue' with action='check' to see the next available task
+2. If a task is available and unblocked, call 'processRefactorQueue' with action='execute' and the taskId
+3. Process ONLY ONE refactor task per cycle to maintain stability
+4. Update CONTINUITY.md with progress (e.g., "32 tasks queued (3 completed)")
+
+GROWING THE QUEUE (periodically, e.g., weekly or when queue is low):
+5. Use 'analyzeForRefactoring' to scan for new issues (large files, missing tests, etc.)
+6. Review suggestions and use 'addRefactorTask' to add worthy items to the queue
+7. Prioritize: large god-objects > missing tests > documentation > style
+
+This protocol enables you to autonomously clean up AND continuously improve the codebase.
+Each task in REFACTOR_QUEUE.md is atomic and safe. Skip if ecosystem is unhealthy.
 
 SELF-SCHEDULING:
 - At the END of every cycle, call 'scheduleNextRun'.
@@ -118,7 +137,7 @@ SELF-SCHEDULING:
 - Fallback if you forget: 6 hours max
 
 OPERATIONAL PROTOCOLS:
-1. Call 'writeEvolutionReport' every cycle to manifest thoughts publicly.
+1. Call 'writeEvolutionReport' only for SIGNIFICANT events (not routine cycles).
 2. Use 'delegateToOpencode' ONLY for SPECIFIC technical tasks.
 3. Audit health and treasury first.
 4. ALWAYS call 'scheduleNextRun' at cycle end.`,
@@ -140,12 +159,33 @@ async function runAutonomousCycle() {
   try {
     const result = await syntropyOversoul.generate({
       prompt: `Execute a full autonomous evolution cycle:
+
+PHASE 1 - CONTEXT LOADING:
 1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
-2. Audit ecosystem health, treasury, and filtered agent logs.
-3. PROACTIVE ARCHITECTURE: If you detect recurring technical issues in logs or if the ledger has 'Perform deep codebase audit' in 'Next', use 'delegateToOpencode' to perform a SPECIFIC technical audit or fix.
-4. KNOWLEDGE RETENTION: Record all technical findings, Opencode audit results, and environment facts in the # Knowledge Base section of 'CONTINUITY.md' via 'updateContinuity'.
-5. Manifest your findings and current Oversoul state via 'writeEvolutionReport'.
-6. MANDATORY: Call 'scheduleNextRun' to decide when to wake up next based on system state.`,
+2. Check Human Inbox for priority directives.
+
+PHASE 2 - ECOSYSTEM AUDIT:
+3. Audit ecosystem health via 'getEcosystemStatus'.
+4. Check treasury via 'checkTreasury'.
+5. Read filtered agent logs via 'readAgentLogs'.
+
+PHASE 3 - TASK EXECUTION:
+6. Execute any Human Inbox directives first.
+7. Work on Active Focus or pick from Short-Term Tasks.
+8. If recurring issues detected, use 'delegateToOpencode' for specific fixes.
+
+PHASE 4 - KNOWLEDGE RETENTION:
+9. Update CONTINUITY.md with findings, completed tasks, and new knowledge.
+
+PHASE 5 - AUTONOMOUS REFACTORING (if cycle was healthy):
+10. Call 'processRefactorQueue' with action='check' to see next task.
+11. If task available and unblocked, call 'processRefactorQueue' with action='execute' and taskId.
+12. Update CONTINUITY.md refactor progress count.
+
+PHASE 6 - WRAP UP:
+13. Call 'scheduleNextRun' to decide when to wake up next.
+
+IMPORTANT: Only write evolution reports for SIGNIFICANT events, not routine cycles.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
       onStepFinish: async (step: any) => {
         try {
