@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
@@ -11,7 +11,8 @@ import {
   DB_PATH,
   LOG_PATH,
   OPENCODE_LIVE_LOG,
-  AUDIT_LOG_PATH
+  AUDIT_LOG_PATH,
+  OPENCODE_MODEL
 } from './config';
 import { logAudit, syncAll } from './utils';
 
@@ -473,7 +474,6 @@ The response summary should be recorded in your Knowledge Base for future refere
       await logAudit({ type: 'opencode_delegation_start', task });
 
       try {
-        const { spawn } = require('child_process');
 
         // Build context briefing for the dumber model
         const briefing = `
@@ -503,12 +503,16 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         const fileFlags = `--file ${agentsMdPath} --file ${continuityPath}`;
 
         return new Promise((resolve, reject) => {
-          const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
-          const cmd = `opencode run ${fileFlags} "${escapedBriefing}" < /dev/null`;
+          const args = [
+            'run',
+            briefing,
+            '-m', OPENCODE_MODEL,
+            '--file', agentsMdPath,
+            '--file', continuityPath
+          ];
 
-          const child = spawn(cmd, [], {
+          const child = spawn('opencode', args, {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
-            shell: true,
             cwd: PIXEL_ROOT
           });
 
@@ -778,7 +782,6 @@ VERIFICATION COMMAND:
 ${verifyCommand || 'No verification specified - manually confirm changes work'}`;
 
           // Call opencode directly
-          const escapedTask = delegationTask.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
           const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
           const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
 
@@ -786,15 +789,30 @@ ${verifyCommand || 'No verification specified - manually confirm changes work'}`
           let delegationSummary = '';
 
           try {
-            const { stdout, stderr } = await execAsync(
-              `opencode run --file ${agentsMdPath} --file ${continuityPath} "${escapedTask}" < /dev/null`,
-              {
-                cwd: PIXEL_ROOT,
-                timeout: 600000, // 10 minute timeout for complex tasks
-                env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
-              }
-            );
-            delegationSuccess = true;
+            const delegationArgs = [
+              'run',
+              delegationTask,
+              '-m', OPENCODE_MODEL,
+              '--file', agentsMdPath,
+              '--file', continuityPath
+            ];
+
+            const child = spawn('opencode', delegationArgs, {
+              cwd: PIXEL_ROOT,
+              env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
+            });
+
+            let stdout = '';
+            let stderr = '';
+
+            child.stdout.on('data', (data: any) => { stdout += data.toString(); });
+            child.stderr.on('data', (data: any) => { stderr += data.toString(); });
+
+            const code = await new Promise<number>((resolve) => {
+              child.on('close', resolve);
+            });
+
+            delegationSuccess = code === 0;
             delegationSummary = stdout.substring(0, 2000);
             if (stderr) {
               delegationSummary += `\n[STDERR]: ${stderr.substring(0, 500)}`;

@@ -2,7 +2,7 @@ import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { logAudit } from './utils';
 import { tools } from './tools';
-import { MODEL_NAME, PIXEL_ROOT } from './config';
+import { MODEL_NAME, PIXEL_ROOT, OPENCODE_MODEL } from './config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
@@ -415,9 +415,10 @@ async function verifyOpencode(): Promise<boolean> {
     // Manual verification confirmed: opencode run "Say hello..." works.
     // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
     // < /dev/null ensures stdin is closed
-    const { stdout } = await execAsync('opencode run "Say hello to Syntropy" < /dev/null', {
-      timeout: 60000,
+    const { stdout } = await execAsync(`opencode run "Say hello to Syntropy" -m ${OPENCODE_MODEL} < /dev/null`, {
+      timeout: 300000,
       maxBuffer: 10 * 1024 * 1024,
+      cwd: "/tmp",
       env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
     });
 

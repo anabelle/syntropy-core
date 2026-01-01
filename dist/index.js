@@ -393,7 +393,7 @@ async function verifyOpencode() {
         // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
         // < /dev/null ensures stdin is closed
         const { stdout } = await execAsync('opencode run "Say hello to Syntropy" < /dev/null', {
-            timeout: 60000,
+            timeout: 300000,
             maxBuffer: 10 * 1024 * 1024,
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
         });
