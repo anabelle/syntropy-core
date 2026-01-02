@@ -11,6 +11,18 @@ echo "[WORKER] TASK_ID: ${TASK_ID:-not set}"
 echo "[WORKER] Hostname: $(hostname)"
 echo "[WORKER] Date: $(date -Iseconds)"
 
+LOCK_FILE="/pixel/data/worker-lock.json"
+cleanup_lock() {
+  if [[ -f "$LOCK_FILE" ]]; then
+    local lock_task
+    lock_task=$(jq -r '.taskId // empty' "$LOCK_FILE" 2>/dev/null || true)
+    if [[ "$lock_task" == "$TASK_ID" ]]; then
+      rm -f "$LOCK_FILE" || true
+    fi
+  fi
+}
+trap cleanup_lock EXIT
+
 # ============================================
 # GUARDRAILS
 # ============================================

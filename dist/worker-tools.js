@@ -19,6 +19,42 @@ import { logAudit } from './utils';
 // ============================================
 const LEDGER_PATH = path.join(PIXEL_ROOT, 'data', 'task-ledger.json');
 const CONTINUITY_PATH = path.join(PIXEL_ROOT, 'CONTINUITY.md');
+const WORKER_LOCK_PATH = path.join(PIXEL_ROOT, 'data', 'worker-lock.json');
+async function getRunningWorkerContainers() {
+    return new Promise((resolve) => {
+        const proc = spawn('docker', ['ps', '--filter', 'name=pixel-worker-', '--format', '{{.Names}}']);
+        let output = '';
+        proc.stdout.on('data', (d) => { output += d.toString(); });
+        proc.on('close', () => {
+            const names = output
+                .split('\n')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            resolve(names);
+        });
+        proc.on('error', () => resolve([]));
+    });
+}
+async function acquireWorkerLock(taskId) {
+    await fs.ensureDir(path.dirname(WORKER_LOCK_PATH));
+    // If lock exists but no workers are running, treat as stale.
+    if (await fs.pathExists(WORKER_LOCK_PATH)) {
+        const running = await getRunningWorkerContainers();
+        if (running.length === 0) {
+            await fs.remove(WORKER_LOCK_PATH);
+        }
+    }
+    try {
+        const handle = await fs.open(WORKER_LOCK_PATH, 'wx');
+        await fs.writeFile(handle, JSON.stringify({ taskId, createdAt: new Date().toISOString() }, null, 2));
+        await fs.close(handle);
+        return { acquired: true };
+    }
+    catch {
+        const running = await getRunningWorkerContainers();
+        return { acquired: false, reason: running.length ? `Worker already running: ${running.join(', ')}` : 'Worker lock already held' };
+    }
+}
 async function readTaskLedger() {
     try {
         if (await fs.pathExists(LEDGER_PATH)) {
@@ -67,16 +103,17 @@ export async function spawnWorkerInternal(params) {
     const { task, context, priority = 'normal' } = params;
     console.log(`[SYNTROPY] spawnWorkerInternal (priority=${priority})`);
     console.log(`[SYNTROPY] Task: ${task.substring(0, 200)}...`);
-    // 1. Check for existing running workers (single-flight)
+    // 1. Enforce single-worker-at-a-time
     const ledger = await readTaskLedger();
-    const runningTasks = ledger.tasks.filter(t => t.status === 'running');
-    if (runningTasks.length > 0) {
-        console.warn('[SYNTROPY] Worker spawn rejected - another worker is running');
-        await logAudit({ type: 'worker_spawn_rejected', reason: 'worker_busy', runningTaskId: runningTasks[0].id });
+    const lockTaskId = crypto.randomUUID();
+    const lock = await acquireWorkerLock(lockTaskId);
+    if (!lock.acquired) {
+        const runningTasks = ledger.tasks.filter(t => t.status === 'running');
+        await logAudit({ type: 'worker_spawn_rejected', reason: 'worker_busy', detail: lock.reason, runningTaskId: runningTasks[0]?.id });
         return {
-            error: 'Another worker is currently running. Wait for it to complete or use checkWorkerStatus to monitor.',
-            runningTaskId: runningTasks[0].id,
-            runningTaskStatus: runningTasks[0].status,
+            error: `Another worker is currently running (single-flight enforced). ${lock.reason}`,
+            runningTaskId: runningTasks[0]?.id,
+            runningTaskStatus: runningTasks[0]?.status,
         };
     }
     // 2. Generate task ID and create ledger entry
@@ -93,13 +130,16 @@ export async function spawnWorkerInternal(params) {
     ledger.tasks.push(newTask);
     await writeTaskLedger(ledger);
     await logAudit({ type: 'worker_task_created', taskId, task: task.substring(0, 500) });
+    // Update lock to track the real taskId (worker will clear this lock when it exits)
+    await fs.writeFile(WORKER_LOCK_PATH, JSON.stringify({ taskId, createdAt: new Date().toISOString() }, null, 2));
     // 3. Spawn worker container
     const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
     console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
     const proc = spawn('docker', [
-        'compose', 'run', '-d',
+        'compose', '--profile', 'worker',
+        'run', '-d',
         '--name', containerName,
-        '--rm', // Auto-remove on exit
+        // NOTE: no --rm; keeping container allows `docker compose logs -f worker`
         '-e', `TASK_ID=${taskId}`,
         'worker'
     ], { cwd: PIXEL_ROOT });
@@ -318,9 +358,10 @@ The new Syntropy will read CONTINUITY.md to restore context.
         const containerName = `pixel-worker-rebuild-${taskId.slice(0, 8)}`;
         console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
         const proc = spawn('docker', [
-            'compose', 'run', '-d',
+            'compose', '--profile', 'worker',
+            'run', '-d',
             '--name', containerName,
-            '--rm',
+            // NOTE: no --rm; keep container for log inspection
             '-e', `TASK_ID=${taskId}`,
             'worker'
         ], { cwd: PIXEL_ROOT });
@@ -381,6 +422,14 @@ Run this periodically to keep the ledger clean.`,
                     task.completedAt = new Date().toISOString();
                     aborted++;
                     await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_missing' });
+                }
+                else if (status.exited) {
+                    task.status = 'aborted';
+                    task.exitCode = status.exitCode;
+                    task.error = `Worker container exited unexpectedly (exitCode=${status.exitCode})`;
+                    task.completedAt = new Date().toISOString();
+                    aborted++;
+                    await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_exited', exitCode: status.exitCode });
                 }
             }
         }
