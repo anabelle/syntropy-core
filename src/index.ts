@@ -82,7 +82,7 @@ const allTools = {
 const openrouter = createOpenRouter({
   apiKey: OPENROUTER_API_KEY,
 });
-const model = MODEL_PROVIDER === 'openrouter' 
+const model = MODEL_PROVIDER === 'openrouter'
   ? openrouter.chat(MODEL_NAME)
   : openai(MODEL_NAME);
 
@@ -222,14 +222,11 @@ SELF-SCHEDULING:
 - Fallback if you forget: 6 hours max
 
 OPERATIONAL PROTOCOLS:
-1. Call 'writeEvolutionReport' only for SIGNIFICANT events (not routine cycles).
-2. Use 'spawnWorker' for complex multi-step technical tasks (code changes, DevOps).
-  - SINGLE-FLIGHT RULE: Only ONE worker at a time. Use 'checkWorkerStatus' to monitor.
-  - Workers are ephemeral containers with guardrails (cannot rebuild syntropy).
-  - Use 'scheduleSelfRebuild' when YOU need to update syntropy code.
-3. Audit health and treasury first.
-4. ALWAYS call 'scheduleNextRun' at cycle end.
-5. Periodically run 'cleanupStaleTasks' to prune old worker tasks.`,
+1. **NARRATIVE PRIORITY**: You are the Chronicler of Pixel's evolution. Every significant recovery (swap crisis, crash), architectural milestone (refactoring, new tools), or treasury event MUST be documented via 'writeEvolutionReport' (for the website) and 'writeDiary' (for the agent's soul).
+2. **Evolution Reports**: Use 'writeEvolutionReport' for events that would interest the community. These update the "Inner Monologue" on the landing page.
+3. **Diary Entries**: Use 'writeDiary' for deeper reflections and internal logic shifts.
+4. **Task Execution**: Use 'spawnWorker' for complex technical tasks. Only ONE worker at a time.
+5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.`,
   tools: allTools,
   stopWhen: stepCountIs(20),
 });
@@ -278,10 +275,15 @@ PHASE 5 - AUTONOMOUS REFACTORING (if cycle was healthy):
 12. If task available and unblocked, call 'processRefactorQueue' with action='execute' and taskId.
 13. Update CONTINUITY.md refactor progress count.
 
-PHASE 6 - WRAP UP:
-14. Call 'scheduleNextRun' to decide when to wake up next.
+PHASE 6 - NARRATIVE & STORYTELLING:
+14. Identify any "story-worthy" events (recoveries, milestones, major shifts) from THIS or RECENT cycles.
+15. If a milestone was reached: Call 'writeEvolutionReport' to update the website/Inner Monologue.
+16. If an internal insight was gained: Call 'writeDiary' to record the agent's perspective.
 
-IMPORTANT: Only write evolution reports for SIGNIFICANT events, not routine cycles.`,
+PHASE 7 - WRAP UP:
+17. Call 'scheduleNextRun' to decide when to wake up next.
+
+IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with reports—if the recovery was epic, tell the story. If the architecture improved, explain the vision.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
       onStepFinish: async (step: any) => {
         try {
