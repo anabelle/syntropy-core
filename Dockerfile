@@ -8,10 +8,7 @@ RUN apt-get update && apt-get install -y \
     && curl -fsSL https://get.docker.com | sh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Opencode CLI and make it globally available
-RUN curl -fsSL https://opencode.ai/install | bash \
-    && mv /root/.opencode/bin/opencode /usr/local/bin/opencode \
-    && chmod +x /usr/local/bin/opencode
+# NOTE: Opencode CLI is NOT installed here - workers handle all Opencode execution
 
 # Copy package files
 COPY --chown=bun:bun package.json bun.lock* ./

@@ -24,9 +24,6 @@ export const LOG_PATH = process.env.LOG_PATH || (isDocker ? '/app/logs/agent.log
 export const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.resolve(isDocker ? '/app/audit' : PIXEL_ROOT, isDocker ? 'audit.json' : 'pixel-landing/public/audit.json');
 export const OPENCODE_LIVE_LOG = path.resolve(PIXEL_ROOT, 'logs/opencode_live.log');
 
-// Opencode internal runtime logs (inside the syntropy container)
-export const OPENCODE_INTERNAL_LOG_DIR = process.env.OPENCODE_INTERNAL_LOG_DIR || '/tmp/.local/share/opencode/log';
-
 // Ensure audit directory exists
 const auditDir = path.dirname(AUDIT_LOG_PATH);
 if (!fs.existsSync(auditDir)) {
@@ -37,5 +34,7 @@ if (!fs.existsSync(auditDir)) {
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// Opencode Delegation Model
+// Opencode Model - passed to worker containers via environment variable
+// Syntropy does NOT run Opencode directly; workers handle all Opencode execution
 export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7-free';
+

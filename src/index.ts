@@ -2,7 +2,7 @@ import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { logAudit } from './utils';
 import { tools } from './tools';
-import { MODEL_NAME, PIXEL_ROOT, OPENCODE_MODEL } from './config';
+import { MODEL_NAME, PIXEL_ROOT } from './config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
@@ -411,40 +411,15 @@ async function scheduleNextCycle() {
 // ============================================
 // STARTUP
 // ============================================
-async function verifyOpencode(): Promise<boolean> {
-  console.log('[SYNTROPY] Verifying Opencode Agent availability (CLI)...');
-  try {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
+// NOTE: Opencode verification removed - workers handle all Opencode execution
+// See Dockerfile.worker and worker-entrypoint.sh for worker-based Opencode usage
 
-    // Manual verification confirmed: opencode run "Say hello..." works.
-    // CI=true prevents interactive prompts (Terms/Telemetry) that cause hangs
-    // < /dev/null ensures stdin is closed
-    const { stdout } = await execAsync(`opencode run "Say hello to Syntropy" -m ${OPENCODE_MODEL} < /dev/null`, {
-      timeout: 300000,
-      maxBuffer: 10 * 1024 * 1024,
-      cwd: "/tmp",
-      env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
-    });
-
-    const response = stdout.trim();
-    console.log(`[SYNTROPY] Opencode CLI Response:\n${response}`);
-    await logAudit({ type: 'opencode_verified', method: 'cli', response: response.slice(0, 500) });
-    return true;
-  } catch (error: any) {
-    console.error(`[SYNTROPY] Opencode verification failed: ${error.message}`);
-    await logAudit({ type: 'opencode_verification_failed', error: error.message });
-    return false;
-  }
-}
-
-async function verifyCapabilities(): Promise<{ git: boolean, docker: boolean, opencode: boolean }> {
+async function verifyCapabilities(): Promise<{ git: boolean, docker: boolean }> {
   const { exec } = require('child_process');
   const { promisify } = require('util');
   const execAsync = promisify(exec);
 
-  const results = { git: false, docker: false, opencode: false };
+  const results = { git: false, docker: false };
 
   // Check GH_TOKEN
   if (process.env.GH_TOKEN) {
@@ -463,14 +438,8 @@ async function verifyCapabilities(): Promise<{ git: boolean, docker: boolean, op
     console.warn('[SYNTROPY] ⚠️  Docker socket not accessible - container monitoring disabled');
   }
 
-  // Check Opencode (non-blocking, quick check)
-  try {
-    await execAsync('which opencode', { timeout: 2000 });
-    console.log('[SYNTROPY] ✅ Opencode CLI found');
-    results.opencode = true;
-  } catch (e) {
-    console.warn('[SYNTROPY] ⚠️  Opencode not found - delegation disabled');
-  }
+  // NOTE: Opencode check removed - workers handle all Opencode execution
+  // Workers are spawned via docker compose run and have their own Opencode installation
 
   await logAudit({ type: 'capabilities_check', results });
   return results;
@@ -483,18 +452,9 @@ async function startup() {
   console.log(`[SYNTROPY] Fallback interval: ${MAX_INTERVAL_MS / 60000} minutes (max)`);
   console.log(`[SYNTROPY] Minimum interval: ${MIN_INTERVAL_MS / 60000} minutes`);
 
-  // Quick capability check
-  const caps = await verifyCapabilities();
-
-  // Detailed Opencode verification only if CLI exists
-  if (caps.opencode) {
-    const opencodeReady = await verifyOpencode();
-    if (!opencodeReady) {
-      console.warn('[SYNTROPY] ⚠️  Opencode available but not responding');
-    } else {
-      console.log('[SYNTROPY] ✅ Opencode Agent verified and ready');
-    }
-  }
+  // Quick capability check (git, docker)
+  // NOTE: Opencode not checked here - workers handle all Opencode execution
+  await verifyCapabilities();
 
   // Check if we should wait before running first cycle
   const schedule = await getNextScheduledRun();
