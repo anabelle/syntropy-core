@@ -44,7 +44,7 @@ For full architecture details, see [WORKER_ARCHITECTURE.md](../docs/WORKER_ARCHI
 
 ## Current Stack (January 2026)
 - **Runtime**: Bun v1.3+
-- **Intelligence**: AI SDK (OpenAI gpt-5-mini-mini)
+- **Intelligence**: AI SDK (OpenAI gpt-5-mini)
 - **Agent Framework**: ElizaOS v1.6.2 with CLI v1.7.0
 - **Database**: PostgreSQL (pgvector enabled) via Docker Compose (`pixel-postgres`)
 - **Deployment**: Docker Compose with Nginx Reverse Proxy
