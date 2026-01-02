@@ -443,70 +443,70 @@ IMPORTANT:
         }
     }),
     readPixelMemories: tool({
-        description: `Read Pixel's memories from the embedded PGLite database.
-ElizaOS stores all data in PGLite (embedded PostgreSQL) at /app/.eliza/.elizadb/ inside the agent container.
-The 'memories' table contains ALL agent data with different content types:
-- messages: Regular conversation messages (content.source = telegram/nostr/etc)
-- self_reflection: Periodic self-analysis with strengths/weaknesses (content.type = 'self_reflection')
-- life_milestone: Narrative evolution and phase changes (content.type = 'life_milestone')
-- agent_learning: Individual learnings extracted from reflections (content.type = 'agent_learning')
-Use 'messages' to see recent conversations, 'reflections' for insights, 'all' for everything.`,
+        description: `Read Pixel's memories from the PostgreSQL database.
+The agent stores all narrative data in PostgreSQL with different content types:
+- hourly_digest: Hourly activity summaries with topics and events
+- daily_report: Daily narrative reports with themes and learnings
+- emerging_story: Real-time trending topics being tracked
+- narrative_timeline: Timeline lore entries with headlines and insights
+- social_interaction: Individual conversation memories
+Use 'narratives' to see digests/reports/timeline, 'topics' for emerging stories, 'all' for everything.`,
         inputSchema: z.object({
-            category: z.enum(['messages', 'reflections', 'all']).describe('Category: messages (conversations), reflections (self_reflection/life_milestone/agent_learning), or all'),
+            category: z.enum(['narratives', 'topics', 'all']).describe('Category: narratives (hourly/daily/weekly/timeline), topics (emerging_story), or all'),
             limit: z.number().optional().describe('Maximum number of results (default: 10)'),
-            source: z.string().optional().describe('Filter by source (telegram, nostr) - only for messages category')
+            contentType: z.string().optional().describe('Filter by specific content.type (e.g. hourly_digest, daily_report, narrative_timeline)')
         }),
-        execute: async ({ category, limit = 10, source }) => {
-            console.log(`[SYNTROPY] Tool: readPixelMemories (category=${category}, limit=${limit}, source=${source || 'any'})`);
+        execute: async ({ category, limit = 10, contentType }) => {
+            console.log(`[SYNTROPY] Tool: readPixelMemories (category=${category}, limit=${limit}, contentType=${contentType || 'any'})`);
             try {
                 // Build query based on category
                 let whereClause;
-                if (category === 'messages') {
-                    // Messages don't have content.type set, filter by source if provided
-                    whereClause = source
-                        ? `content->>'type' IS NULL AND content->>'source' = '${source}'`
-                        : `content->>'type' IS NULL`;
+                if (contentType) {
+                    whereClause = `content->>'type' = '${contentType}'`;
                 }
-                else if (category === 'reflections') {
-                    whereClause = `content->>'type' IN ('self_reflection', 'life_milestone', 'agent_learning')`;
+                else if (category === 'narratives') {
+                    whereClause = `content->>'type' IN ('hourly_digest', 'daily_report', 'weekly_summary', 'narrative_timeline')`;
+                }
+                else if (category === 'topics') {
+                    whereClause = `content->>'type' = 'emerging_story'`;
                 }
                 else {
-                    whereClause = '1=1'; // all
+                    whereClause = `content->>'type' IS NOT NULL`; // all typed memories
                 }
                 const query = `SELECT id, created_at, content FROM memories WHERE ${whereClause} ORDER BY created_at DESC LIMIT ${limit}`;
-                const script = `
-const { PGlite } = require('@electric-sql/pglite');
-const db = new PGlite('/app/.eliza/.elizadb');
-db.query(\`${query}\`).then(r => console.log(JSON.stringify(r.rows))).catch(e => console.error('ERROR:', e.message));
-`;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
-                if (stderr && stderr.includes('ERROR:')) {
+                const { stdout, stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -t -c "${query.replace(/"/g, '\\"')}"`, { timeout: 15000 });
+                if (stderr && stderr.toLowerCase().includes('error')) {
                     return { error: stderr };
                 }
-                const results = JSON.parse(stdout.trim());
+                // Parse the tabular output from psql
+                const rows = stdout.trim().split('\n').filter(line => line.trim()).map(line => {
+                    try {
+                        const parts = line.split('|').map(p => p.trim());
+                        if (parts.length >= 3) {
+                            return {
+                                id: parts[0],
+                                createdAt: parts[1],
+                                content: JSON.parse(parts[2])
+                            };
+                        }
+                    }
+                    catch { }
+                    return null;
+                }).filter(Boolean);
                 // Format results based on category
-                const memories = results.map((row) => {
+                const memories = rows.map((row) => {
                     const content = row.content || {};
-                    if (category === 'messages' || !content.type) {
-                        // Message format: show conversation flow
-                        return {
-                            id: row.id,
-                            createdAt: row.created_at,
-                            source: content.source,
-                            text: content.text?.substring(0, 800),
-                            isReply: !!content.inReplyTo,
-                            thought: content.thought?.substring(0, 800)
-                        };
-                    }
-                    else {
-                        // Reflection format: show insights
-                        return {
-                            id: row.id,
-                            createdAt: row.created_at,
-                            type: content.type,
-                            data: content.data || content
-                        };
-                    }
+                    const data = content.data || {};
+                    return {
+                        id: row.id,
+                        createdAt: row.createdAt,
+                        type: content.type,
+                        headline: data.headline || data.topic || null,
+                        summary: data.summary || data.narrative || (data.insights ? data.insights.join('; ') : null),
+                        topics: data.topics || data.tags || [],
+                        priority: data.priority || null,
+                        eventCount: data.eventCount || data.mentions || null
+                    };
                 });
                 await logAudit({ type: 'pixel_memories_read', category, count: memories.length });
                 return { memories, count: memories.length, category };
@@ -518,31 +518,45 @@ db.query(\`${query}\`).then(r => console.log(JSON.stringify(r.rows))).catch(e =>
         }
     }),
     getPixelStats: tool({
-        description: "Get statistics about Pixel's memory database - total memories, sources, reflection counts.",
+        description: "Get statistics about Pixel's memory database - total memories by type and source.",
         inputSchema: z.object({}),
         execute: async () => {
             console.log('[SYNTROPY] Tool: getPixelStats');
             try {
-                const script = `
-const { PGlite } = require('@electric-sql/pglite');
-const db = new PGlite('/app/.eliza/.elizadb');
-Promise.all([
-  db.query("SELECT COUNT(*) as total FROM memories"),
-  db.query("SELECT content->>'source' as source, COUNT(*) as count FROM memories WHERE content->>'type' IS NULL GROUP BY content->>'source'"),
-  db.query("SELECT content->>'type' as type, COUNT(*) as count FROM memories WHERE content->>'type' IS NOT NULL GROUP BY content->>'type'")
-]).then(([total, sources, types]) => console.log(JSON.stringify({
-  totalMemories: total.rows[0]?.total || 0,
-  messagesBySource: sources.rows,
-  reflectionsByType: types.rows
-}))).catch(e => console.error('ERROR:', e.message));
-`;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
-                if (stderr && stderr.includes('ERROR:')) {
+                const { stdout, stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -t -c "
+            SELECT 
+              COALESCE(content->>'type', 'untyped') as type,
+              COALESCE(content->>'source', 'unknown') as source,
+              COUNT(*) as count
+            FROM memories 
+            GROUP BY content->>'type', content->>'source'
+            ORDER BY count DESC;
+          "`, { timeout: 15000 });
+                if (stderr && stderr.toLowerCase().includes('error')) {
                     return { error: stderr };
                 }
-                const stats = JSON.parse(stdout.trim());
-                await logAudit({ type: 'pixel_stats', ...stats });
-                return stats;
+                // Parse tabular output
+                const stats = stdout.trim().split('\n').filter(line => line.trim()).map(line => {
+                    const parts = line.split('|').map(p => p.trim());
+                    return {
+                        type: parts[0] || 'untyped',
+                        source: parts[1] || 'unknown',
+                        count: parseInt(parts[2]) || 0
+                    };
+                });
+                const totalMemories = stats.reduce((sum, s) => sum + s.count, 0);
+                // Group by type
+                const byType = {};
+                stats.forEach(s => {
+                    byType[s.type] = (byType[s.type] || 0) + s.count;
+                });
+                const result = {
+                    totalMemories,
+                    byType,
+                    detailed: stats
+                };
+                await logAudit({ type: 'pixel_stats', ...result });
+                return result;
             }
             catch (error) {
                 return { error: `Failed to get Pixel stats: ${error.message}` };

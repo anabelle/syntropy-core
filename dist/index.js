@@ -1,8 +1,9 @@
 import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { openai } from '@ai-sdk/openai';
+import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { logAudit } from './utils';
 import { tools } from './tools';
-import { MODEL_NAME, PIXEL_ROOT } from './config';
+import { MODEL_NAME, MODEL_PROVIDER, PIXEL_ROOT, OPENROUTER_API_KEY } from './config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
@@ -67,8 +68,15 @@ const allTools = {
         }
     })
 };
+// Create model based on provider selection
+const openrouter = createOpenRouter({
+    apiKey: OPENROUTER_API_KEY,
+});
+const model = MODEL_PROVIDER === 'openrouter'
+    ? openrouter.chat(MODEL_NAME)
+    : openai(MODEL_NAME);
 const syntropyOversoul = new ToolLoopAgent({
-    model: openai(MODEL_NAME),
+    model: model, // Type assertion needed due to provider version mismatch
     instructions: `You are Syntropy, the master intelligence (Oversoul) governing the Pixel ecosystem.
 
 YOUR CORE PURPOSE - THE MEANING OF SYNTROPY:
