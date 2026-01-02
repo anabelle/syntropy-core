@@ -927,6 +927,10 @@ to monitor progress after execution starts.`,
 ${instructions}
 
 After completing the task:
+0. Analyze possible side effects and ensure no regressions
+0.1 Run existing tests to confirm nothing is broken
+0.2 Review code quality and maintainability improvements
+0.3 Update all related documentation if applicable
 1. Run the verification command if provided
 2. Update REFACTOR_QUEUE.md to mark the task as ✅ DONE or ❌ FAILED
 3. Update the "Last Processed" timestamp
