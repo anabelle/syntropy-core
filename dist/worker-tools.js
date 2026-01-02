@@ -135,12 +135,17 @@ export async function spawnWorkerInternal(params) {
     // 3. Spawn worker container
     const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
     console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
+    // HOST_PIXEL_ROOT is the absolute host path where /pixel is mounted.
+    // Docker compose needs this because relative paths (.) resolve to the
+    // container's PWD when running via docker socket, not the host's real path.
+    const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
     const proc = spawn('docker', [
         'compose', '--profile', 'worker',
         'run', '-d',
         '--name', containerName,
         // NOTE: no --rm; keeping container allows `docker compose logs -f worker`
         '-e', `TASK_ID=${taskId}`,
+        '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
         'worker'
     ], { cwd: PIXEL_ROOT });
     let spawnOutput = '';
@@ -363,12 +368,14 @@ The new Syntropy will read CONTINUITY.md to restore context.
         // 3. Spawn the rebuild worker
         const containerName = `pixel-worker-rebuild-${taskId.slice(0, 8)}`;
         console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
+        const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
         const proc = spawn('docker', [
             'compose', '--profile', 'worker',
             'run', '-d',
             '--name', containerName,
             // NOTE: no --rm; keep container for log inspection
             '-e', `TASK_ID=${taskId}`,
+            '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
             'worker'
         ], { cwd: PIXEL_ROOT });
         let spawnError = '';

@@ -247,24 +247,30 @@ PHASE 1 - CONTEXT LOADING:
 PHASE 2 - ECOSYSTEM AUDIT:
 3. Audit ecosystem health via 'getEcosystemStatus'.
 4. Check treasury via 'checkTreasury'.
-5. Read filtered agent logs via 'readAgentLogs'.
+5. Check VPS resources via 'getVPSMetrics'.
+   - If status is 'STALE': vps-monitor container may need restart
+   - If status is 'CRITICAL' or 'WARNING': Review alerts and recommendations
+   - If disk > 85%: Run cleanup (docker prune, delete old backups)
+   - If memory > 90%: Identify memory hogs in containerStats
+   - If load > 1.5 per core: Check for runaway processes
+6. Read filtered agent logs via 'readAgentLogs'.
 
 PHASE 3 - TASK EXECUTION:
-6. Execute any Human Inbox directives first.
-7. Work on Active Focus or pick from Short-Term Tasks.
-8. If complex fixes needed, use 'spawnWorker' to delegate (check status with 'checkWorkerStatus').
-  - Only ONE worker at a time. Workers run in isolated containers with guardrails.
+7. Execute any Human Inbox directives first.
+8. Work on Active Focus or pick from Short-Term Tasks.
+9. If complex fixes needed, use 'spawnWorker' to delegate (check status with 'checkWorkerStatus').
+   - Only ONE worker at a time. Workers run in isolated containers with guardrails.
 
 PHASE 4 - KNOWLEDGE RETENTION:
-9. Update CONTINUITY.md with findings, completed tasks, and new knowledge.
+10. Update CONTINUITY.md with findings, completed tasks, and new knowledge.
 
 PHASE 5 - AUTONOMOUS REFACTORING (if cycle was healthy):
-10. Call 'processRefactorQueue' with action='check' to see next task.
-11. If task available and unblocked, call 'processRefactorQueue' with action='execute' and taskId.
-12. Update CONTINUITY.md refactor progress count.
+11. Call 'processRefactorQueue' with action='check' to see next task.
+12. If task available and unblocked, call 'processRefactorQueue' with action='execute' and taskId.
+13. Update CONTINUITY.md refactor progress count.
 
 PHASE 6 - WRAP UP:
-13. Call 'scheduleNextRun' to decide when to wake up next.
+14. Call 'scheduleNextRun' to decide when to wake up next.
 
 IMPORTANT: Only write evolution reports for SIGNIFICANT events, not routine cycles.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
