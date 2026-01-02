@@ -1,0 +1,26 @@
+FROM oven/bun:1-slim
+
+# Install Docker CLI, git, and other essentials
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      coreutils \
+      curl \
+      git \
+      jq \
+      wget && \
+    # Install Docker CLI
+    curl -fsSL https://get.docker.com | sh && \
+    # Install Opencode AI CLI
+    curl -fsSL https://opencode.ai/install | bash && \
+    mv /root/.local/bin/opencode /usr/local/bin/ || true && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /pixel
+
+# Copy entrypoint script
+COPY worker-entrypoint.sh /worker-entrypoint.sh
+RUN chmod +x /worker-entrypoint.sh
+
+# Run as non-root by default (user mapped at runtime)
+ENTRYPOINT ["/worker-entrypoint.sh"]

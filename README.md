@@ -15,22 +15,34 @@ State tracking is maintained in the root [CONTINUITY.md](../CONTINUITY.md).
 - **Self-Evolution**: Capable of modifying its own code and pushing updates via Git.
 - **Ecosystem Monitoring**: Real-time status tracking of Docker Compose services.
 - **Treasury Management**: Monitoring sat flow in the LNPixels database.
-- **Opencode Integration**: Delegate complex coding tasks to the Opencode AI Agent.
+- **Worker Architecture**: Brain/Hands separation - spawns ephemeral Worker containers for code changes.
 
-## Opencode Visibility
-When Syntropy delegates to Opencode, it now records extra runtime visibility so you can debug “completed but unclear output” situations from container logs.
+## Worker Architecture (January 2026)
 
-- Live append-only delegation log: `logs/opencode_live.log`
-- Opencode internal log dir (inside container): `/tmp/.local/share/opencode/log`
-- Audit entries emitted: `opencode_delegation_spawn`, `opencode_delegation_exit` (plus existing success/error events)
+Syntropy uses the **Brain/Hands separation pattern** for safe autonomous code modifications:
 
-Optional env toggles:
-- `OPENCODE_STREAM_CONSOLE=false` disables streaming Opencode stdout/stderr into `docker logs`
-- `OPENCODE_MAX_CONSOLE_BYTES=20000` caps streamed console output
-- `OPENCODE_INTERNAL_LOG_DIR=/tmp/.local/share/opencode/log` override internal log directory
-- `OPENCODE_INTERNAL_TAIL_BYTES=32768` tail bytes captured from Opencode internal logs
+- **Syntropy (Brain)**: Orchestrates tasks, monitors health, NEVER rebuilds itself
+- **Worker (Hands)**: Ephemeral containers that run Opencode for actual code changes
+- **Task Ledger**: Persistent state at `/pixel/data/task-ledger.json`
 
-## Current Stack (December 2025)
+### Worker Tools
+| Tool | Purpose |
+|------|---------|
+| `spawnWorker` | Queue a coding task for worker execution |
+| `checkWorkerStatus` | Monitor worker progress |
+| `listWorkerTasks` | View task ledger |
+| `readWorkerLogs` | Read worker output logs |
+| `scheduleSelfRebuild` | Safe protocol for Syntropy self-updates |
+| `cleanupStaleTasks` | Prune old completed tasks |
+
+### Worker Logs
+- Live shared log: `logs/opencode_live.log`
+- Per-task logs: `logs/worker-{taskId}.log`
+- Task output: `data/worker-output-{taskId}.txt`
+
+For full architecture details, see [WORKER_ARCHITECTURE.md](../docs/WORKER_ARCHITECTURE.md).
+
+## Current Stack (January 2026)
 - **Runtime**: Bun v1.3+
 - **Intelligence**: AI SDK (OpenAI gpt-5-mini-mini)
 - **Agent Framework**: ElizaOS v1.6.2 with CLI v1.7.0

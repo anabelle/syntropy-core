@@ -1,88 +1,17 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { exec, spawn } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, OPENCODE_LIVE_LOG, AUDIT_LOG_PATH, OPENCODE_MODEL, OPENCODE_INTERNAL_LOG_DIR } from './config';
+import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, AUDIT_LOG_PATH } from './config';
 import { logAudit, syncAll } from './utils';
+import { workerTools } from './worker-tools';
 const execAsync = promisify(exec);
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 const CONTINUITY_PATH = isDocker
     ? path.resolve(PIXEL_ROOT, 'CONTINUITY.md')
     : path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
-// Opencode concurrency control: allow only one Opencode run at a time.
-// IMPORTANT: No queue. If Opencode is already running, new delegations are rejected.
-const OPENCODE_DELEGATION_LOCK_PATH = process.env.OPENCODE_DELEGATION_LOCK_PATH || '/tmp/syntropy-opencode-delegation.lock';
-const tryAcquireOpencodeLock = async (task) => {
-    const staleMs = Number.parseInt(process.env.OPENCODE_LOCK_STALE_MS || String(2 * 60 * 60 * 1000), 10); // 2h
-    const payload = {
-        pid: process.pid,
-        startedAt: new Date().toISOString(),
-        task: task.slice(0, 1000)
-    };
-    const attempt = async () => {
-        try {
-            await fs.ensureDir(path.dirname(OPENCODE_DELEGATION_LOCK_PATH));
-            const fd = await fs.open(OPENCODE_DELEGATION_LOCK_PATH, 'wx');
-            try {
-                await fs.writeFile(fd, JSON.stringify(payload, null, 2), 'utf-8');
-            }
-            finally {
-                await fs.close(fd);
-            }
-            return {
-                path: OPENCODE_DELEGATION_LOCK_PATH,
-                release: async () => {
-                    try {
-                        await fs.remove(OPENCODE_DELEGATION_LOCK_PATH);
-                    }
-                    catch {
-                        // ignore
-                    }
-                }
-            };
-        }
-        catch (error) {
-            if (error?.code !== 'EEXIST')
-                throw error;
-            return null;
-        }
-    };
-    // First attempt
-    let lock = await attempt();
-    if (lock)
-        return lock;
-    // If locked, check for staleness and clear if needed, then retry once.
-    try {
-        const stat = await fs.stat(OPENCODE_DELEGATION_LOCK_PATH);
-        const ageMs = Date.now() - stat.mtimeMs;
-        if (Number.isFinite(staleMs) && staleMs > 0 && ageMs > staleMs) {
-            let staleContents;
-            try {
-                staleContents = await fs.readFile(OPENCODE_DELEGATION_LOCK_PATH, 'utf-8');
-            }
-            catch {
-                // ignore
-            }
-            console.warn(`[SYNTROPY] ⚠️  Removing stale Opencode lock (age=${ageMs}ms): ${OPENCODE_DELEGATION_LOCK_PATH}`);
-            await logAudit({
-                type: 'opencode_lock_stale_removed',
-                lockPath: OPENCODE_DELEGATION_LOCK_PATH,
-                ageMs,
-                staleContents: staleContents?.slice(0, 2000)
-            });
-            await fs.remove(OPENCODE_DELEGATION_LOCK_PATH);
-            lock = await attempt();
-            if (lock)
-                return lock;
-        }
-    }
-    catch {
-        // ignore stat/read issues
-    }
-    return null;
-};
 export const tools = {
     readContinuity: tool({
         description: 'Read the Continuity Ledger. This is the canonical session briefing designed to survive context compaction.',
@@ -504,320 +433,9 @@ Do NOT write reports for routine health checks or status updates.`,
             }
         }
     }),
-    delegateToOpencode: tool({
-        description: `Delegate a task to the Opencode AI Agent - a powerful background assistant similar to you. 
-    
-Opencode is an autonomous coding agent that can:
-- 🔍 Search the web for latest documentation, solutions, or research
-- 💻 Read, analyze, and modify code across the entire codebase  
-- 🛠️ Execute shell commands (with sudo access for DevOps tasks)
-- 📝 Create files, run tests, debug issues
-- 🔧 Perform complex multi-step technical tasks
-
-DELEGATION BEST PRACTICES:
-- Be SPECIFIC and DETAILED in your task description
-- Include context: what problem you're solving, what you've already tried
-- Specify expected output format if needed
-- Opencode works autonomously - it may take several minutes for complex tasks
-
-EXAMPLES:
-- "Search the web for the latest ElizaOS plugin documentation and summarize the plugin registration API"
-- "Audit the pixel-agent logs for the past 24 hours and identify recurring errors"
-- "Refactor the nostr plugin to handle connection timeouts gracefully"
-- "Check if nginx is configured correctly and fix any issues"
-
-The response summary should be recorded in your Knowledge Base for future reference.`,
-        inputSchema: z.object({
-            task: z.string().describe('Detailed technical instruction for Opencode. Be specific about what you want done and any constraints.')
-        }),
-        execute: async ({ task }) => {
-            const lock = await tryAcquireOpencodeLock(task);
-            if (!lock) {
-                let lockContents;
-                try {
-                    lockContents = await fs.readFile(OPENCODE_DELEGATION_LOCK_PATH, 'utf-8');
-                }
-                catch {
-                    // ignore
-                }
-                const msg = `Opencode is busy (another delegation is already running). Try again once the current task finishes.`;
-                console.warn(`[SYNTROPY] ${msg}`);
-                await logAudit({
-                    type: 'opencode_delegation_rejected_busy',
-                    task,
-                    lockPath: OPENCODE_DELEGATION_LOCK_PATH,
-                    lockContents: lockContents?.slice(0, 2000)
-                });
-                return {
-                    error: msg,
-                    lockPath: OPENCODE_DELEGATION_LOCK_PATH,
-                    lockInfo: lockContents?.slice(0, 2000)
-                };
-            }
-            console.log(`[SYNTROPY] Delegating to Opencode Agent (CLI): ${task}`);
-            await logAudit({ type: 'opencode_delegation_start', task });
-            try {
-                const delegationStartMs = Date.now();
-                // Build context briefing for the dumber model
-                const briefing = `
-CONTEXT BRIEFING (Read AGENTS.md for full ops reference):
-- You are in the Pixel monorepo at /pixel
-- Architecture: Docker Compose with services: agent (ElizaOS on :3003), api (:3000), web (:3002), landing (:3001), postgres (:5432), syntropy, nginx
-- Agent runtime: Bun + ElizaOS CLI, PostgreSQL database
-- Key commands: docker compose [ps|logs|restart|up -d --build] <service>
-- Health check: curl http://localhost:3003/health
-- Character rebuild: docker compose run --rm agent bun run build:character
-- Current state: Read CONTINUITY.md for active tasks and known issues
-
-YOUR TASK: ${task}
-
-Execute this task. Read relevant files first if needed. Use docker compose commands for container ops.`;
-                // Ensure log directory exists
-                await fs.ensureDir(path.dirname(OPENCODE_LIVE_LOG));
-                const logStream = fs.createWriteStream(OPENCODE_LIVE_LOG, { flags: 'a' });
-                const timestamp = new Date().toISOString();
-                logStream.write(`\n--- DELEGATION START: ${timestamp} ---\nTASK: ${task}\nBRIEFING INJECTED: yes\n\n`);
-                // Attach key context files so Opencode can read them
-                const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
-                const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
-                const fileFlags = `--file ${agentsMdPath} --file ${continuityPath}`;
-                const readTailBytes = async (filePath, maxBytes) => {
-                    const fd = await fs.open(filePath, 'r');
-                    try {
-                        const stat = await fs.stat(filePath);
-                        const start = Math.max(0, stat.size - maxBytes);
-                        const length = stat.size - start;
-                        const buffer = Buffer.alloc(length);
-                        await fs.read(fd, buffer, 0, length, start);
-                        return buffer.toString('utf-8');
-                    }
-                    finally {
-                        await fs.close(fd);
-                    }
-                };
-                const getLatestInternalOpencodeLog = async () => {
-                    try {
-                        const dirExists = await fs.pathExists(OPENCODE_INTERNAL_LOG_DIR);
-                        if (!dirExists)
-                            return null;
-                        const entries = await fs.readdir(OPENCODE_INTERNAL_LOG_DIR);
-                        const candidatePaths = [];
-                        for (const name of entries) {
-                            if (!name.endsWith('.log'))
-                                continue;
-                            const filePath = path.join(OPENCODE_INTERNAL_LOG_DIR, name);
-                            try {
-                                const stat = await fs.stat(filePath);
-                                // Only consider logs created/updated during or after this delegation.
-                                if (stat.mtimeMs >= delegationStartMs - 5_000) {
-                                    candidatePaths.push({ filePath, mtimeMs: stat.mtimeMs });
-                                }
-                            }
-                            catch {
-                                // Ignore races / permissions
-                            }
-                        }
-                        if (candidatePaths.length === 0)
-                            return null;
-                        candidatePaths.sort((a, b) => b.mtimeMs - a.mtimeMs);
-                        const chosen = candidatePaths[0].filePath;
-                        const maxBytes = Number.parseInt(process.env.OPENCODE_INTERNAL_TAIL_BYTES || '32768', 10);
-                        const tail = await readTailBytes(chosen, Number.isFinite(maxBytes) ? maxBytes : 32768);
-                        const hasError = /\bERROR\b|NotFoundError|Unhandled rejection/i.test(tail);
-                        const asksPermission = /service=permission\b|pattern=\["\/","\/\*"\]/i.test(tail);
-                        return { path: chosen, tail, hasError, asksPermission };
-                    }
-                    catch {
-                        return null;
-                    }
-                };
-                const result = await new Promise((resolve, reject) => {
-                    const args = [
-                        'run',
-                        briefing,
-                        '-m', OPENCODE_MODEL,
-                        '--file', agentsMdPath,
-                        '--file', continuityPath
-                    ];
-                    const child = spawn('opencode', args, {
-                        env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
-                        cwd: PIXEL_ROOT,
-                        stdio: ['ignore', 'pipe', 'pipe']
-                    });
-                    const pid = child.pid ?? null;
-                    const startIso = new Date(delegationStartMs).toISOString();
-                    console.log(`[SYNTROPY] Opencode spawned (pid=${pid ?? 'unknown'}) model=${OPENCODE_MODEL} started=${startIso}`);
-                    logStream.write(`PID: ${pid ?? 'unknown'}\nMODEL: ${OPENCODE_MODEL}\nSTART: ${startIso}\n\n`);
-                    void logAudit({ type: 'opencode_delegation_spawn', task, pid, model: OPENCODE_MODEL, startedAt: startIso });
-                    const clearAllTimers = [];
-                    const registerTimer = (timer) => {
-                        clearAllTimers.push(() => clearTimeout(timer));
-                    };
-                    const registerInterval = (timer) => {
-                        clearAllTimers.push(() => clearInterval(timer));
-                    };
-                    const abortRun = async (reason, details) => {
-                        try {
-                            console.warn(`[SYNTROPY] ⚠️  Aborting Opencode run: ${reason}`);
-                            await logAudit({ type: 'opencode_delegation_aborted', task, pid, reason, ...details });
-                        }
-                        catch {
-                            // best-effort
-                        }
-                        try {
-                            child.kill('SIGTERM');
-                        }
-                        catch {
-                            // ignore
-                        }
-                        // Escalate if still alive after grace period.
-                        const killDelayMs = Number.parseInt(process.env.OPENCODE_ABORT_KILL_MS || '5000', 10);
-                        const killTimer = setTimeout(() => {
-                            try {
-                                child.kill('SIGKILL');
-                            }
-                            catch {
-                                // ignore
-                            }
-                        }, Number.isFinite(killDelayMs) ? killDelayMs : 5000);
-                        registerTimer(killTimer);
-                    };
-                    // Guard: in headless mode, a permission prompt will never be answered and will hang forever.
-                    const guardEnabled = process.env.OPENCODE_PERMISSION_GUARD !== 'false';
-                    if (guardEnabled) {
-                        const intervalMs = Number.parseInt(process.env.OPENCODE_GUARD_INTERVAL_MS || '15000', 10);
-                        const guardInterval = setInterval(async () => {
-                            try {
-                                const internal = await getLatestInternalOpencodeLog();
-                                if (internal?.asksPermission) {
-                                    await abortRun('permission_prompt_detected', {
-                                        internalLogPath: internal.path,
-                                        internalTail: internal.tail.slice(-2000)
-                                    });
-                                }
-                            }
-                            catch {
-                                // ignore
-                            }
-                        }, Number.isFinite(intervalMs) ? intervalMs : 15000);
-                        registerInterval(guardInterval);
-                    }
-                    // Guard: optional overall timeout to prevent runaway sessions.
-                    const timeoutMsRaw = process.env.OPENCODE_TIMEOUT_MS;
-                    const timeoutMs = timeoutMsRaw ? Number.parseInt(timeoutMsRaw, 10) : 45 * 60 * 1000;
-                    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-                        const timeoutTimer = setTimeout(async () => {
-                            await abortRun('timeout', { timeoutMs });
-                        }, timeoutMs);
-                        registerTimer(timeoutTimer);
-                    }
-                    const streamConsole = process.env.OPENCODE_STREAM_CONSOLE !== 'false';
-                    const maxConsoleBytes = Number.parseInt(process.env.OPENCODE_MAX_CONSOLE_BYTES || '20000', 10);
-                    let consoleBytes = 0;
-                    const writeToConsole = (prefix, chunk) => {
-                        if (!streamConsole)
-                            return;
-                        if (!Number.isFinite(maxConsoleBytes) || maxConsoleBytes <= 0)
-                            return;
-                        if (consoleBytes >= maxConsoleBytes)
-                            return;
-                        const remaining = maxConsoleBytes - consoleBytes;
-                        const clipped = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
-                        consoleBytes += clipped.length;
-                        // Prefix each line so docker logs are greppable.
-                        const prefixed = clipped.replace(/\n/g, `\n${prefix}`);
-                        process.stdout.write(`${prefix}${prefixed}`);
-                        if (consoleBytes >= maxConsoleBytes) {
-                            process.stdout.write(`\n[OPENCODE] (console output capped at ${maxConsoleBytes} bytes; see ${OPENCODE_LIVE_LOG})\n`);
-                        }
-                    };
-                    let fullOutput = '';
-                    child.stdout.on('data', (data) => {
-                        const str = data.toString();
-                        fullOutput += str;
-                        logStream.write(str);
-                        writeToConsole('[OPENCODE] ', str);
-                    });
-                    child.stderr.on('data', (data) => {
-                        const str = data.toString();
-                        logStream.write(`[STDERR] ${str}`);
-                        writeToConsole('[OPENCODE:stderr] ', str);
-                    });
-                    child.on('close', async (code) => {
-                        for (const clear of clearAllTimers)
-                            clear();
-                        const endedAtIso = new Date().toISOString();
-                        const durationMs = Date.now() - delegationStartMs;
-                        const internal = await getLatestInternalOpencodeLog();
-                        logStream.write(`\n--- DELEGATION END: ${endedAtIso} (Exit Code: ${code}) ---\n`);
-                        if (internal) {
-                            logStream.write(`\n--- OPENCODE INTERNAL LOG: ${internal.path} ---\n`);
-                            logStream.write(internal.tail);
-                            logStream.write(`\n--- END OPENCODE INTERNAL LOG ---\n`);
-                            const tailPreview = internal.tail.slice(-2000);
-                            console.log(`[SYNTROPY] Opencode internal log: ${internal.path}`);
-                            if (tailPreview.trim()) {
-                                console.log(`[SYNTROPY] Opencode internal tail (last ~2k chars):\n${tailPreview}`);
-                            }
-                            if (internal.hasError || internal.asksPermission) {
-                                console.warn('[SYNTROPY] ⚠️  Opencode internal log indicates errors and/or a permission prompt; check logs for details.');
-                            }
-                        }
-                        logStream.end();
-                        await logAudit({
-                            type: 'opencode_delegation_exit',
-                            task,
-                            pid,
-                            code,
-                            durationMs,
-                            internalLogPath: internal?.path,
-                            internalHasError: internal?.hasError,
-                            internalAsksPermission: internal?.asksPermission
-                        });
-                        if (code === 0) {
-                            console.log('[SYNTROPY] Opencode task completed');
-                            // Try to filter JSON lines if mixed content
-                            let summary = fullOutput.trim();
-                            const lines = summary.split('\n');
-                            const filteredLines = lines.filter((l) => !l.startsWith('{') && !l.startsWith('['));
-                            if (filteredLines.length > 0) {
-                                summary = filteredLines.join('\n');
-                            }
-                            if (!summary.trim() && internal?.tail) {
-                                // Opencode often logs to its internal file instead of stdout; surface it for visibility.
-                                summary = `Opencode produced no stdout. Internal log tail from ${internal.path}:\n\n${internal.tail.slice(-4000)}`;
-                            }
-                            await syncAll(); // Sync code changes
-                            await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
-                            resolve({ success: true, summary: summary.slice(0, 5000) || "Task completed successfully." });
-                        }
-                        else {
-                            const errorMsg = `Opencode exited with code ${code}`;
-                            console.error(`[SYNTROPY] Opencode delegation failed: ${errorMsg}`);
-                            await logAudit({ type: 'opencode_delegation_error', error: errorMsg });
-                            resolve({ error: `Delegation failed: ${errorMsg}` });
-                        }
-                    });
-                    child.on('error', (err) => {
-                        for (const clear of clearAllTimers)
-                            clear();
-                        logStream.write(`[PROCESS ERROR] ${err.message}\n`);
-                        logStream.end();
-                        reject(err);
-                    });
-                });
-                return result;
-            }
-            catch (error) {
-                console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
-                await logAudit({ type: 'opencode_delegation_error', error: error.message });
-                return { error: `Delegation failed: ${error.message}` };
-            }
-            finally {
-                await lock.release();
-            }
-        }
-    }),
+    // NOTE: delegateToOpencode has been replaced by spawnWorker (worker-tools.ts)
+    // The worker architecture prevents accidental self-destruction by running
+    // Opencode in ephemeral containers with guardrails.
     notifyHuman: tool({
         description: 'Send a high-priority notification to the human operator. Use this when you are stuck, need a decision, or have a critical breakthrough. It writes to NOTIFICATIONS.md and logs loudly.',
         inputSchema: z.object({
@@ -878,7 +496,10 @@ PROTOCOL:
 3. Only process ONE task per Syntropy cycle to maintain stability
 
 This tool picks up refactoring tasks that break the "spaghetti" codebase into clean modules.
-Tasks are designed to be atomic and safe - each has rollback instructions if needed.`,
+Tasks are designed to be atomic and safe - each has rollback instructions if needed.
+
+NOTE: Refactoring tasks are executed by spawning a worker container. Use checkWorkerStatus
+to monitor progress after execution starts.`,
         inputSchema: z.object({
             action: z.enum(['check', 'execute']).describe("'check' to see next task, 'execute' to run a specific task"),
             taskId: z.string().optional().describe("Task ID to execute (e.g., 'T001'). Required if action='execute'")
@@ -983,71 +604,47 @@ Tasks are designed to be atomic and safe - each has rollback instructions if nee
                     let updatedContent = content.replace(`### ${taskId}: ${headerMatch[1]} ${headerMatch[2]}`, `### ${taskId}: ${headerMatch[1]} 🟡 IN_PROGRESS`);
                     await fs.writeFile(QUEUE_PATH, updatedContent);
                     await logAudit({ type: 'refactor_task_start', taskId, title: headerMatch[1] });
-                    // Delegate to Opencode directly (avoiding circular reference to tools object)
-                    console.log(`[SYNTROPY] Delegating refactor task ${taskId} to Opencode...`);
-                    const delegationTask = `REFACTORING TASK ${taskId}: ${headerMatch[1]}
+                    // Delegate to Worker (using the worker architecture for safety)
+                    console.log(`[SYNTROPY] Delegating refactor task ${taskId} to Worker...`);
+                    const workerTask = `REFACTORING TASK ${taskId}: ${headerMatch[1]}
 
 ${instructions}
 
 After completing the task:
 1. Run the verification command if provided
-2. Report success or any errors encountered
+2. Update REFACTOR_QUEUE.md to mark the task as ✅ DONE or ❌ FAILED
+3. Update the "Last Processed" timestamp
 
 VERIFICATION COMMAND:
-${verifyCommand || 'No verification specified - manually confirm changes work'}`;
-                    // Call opencode directly
-                    const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
-                    const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
-                    let delegationSuccess = false;
-                    let delegationSummary = '';
-                    try {
-                        const delegationArgs = [
-                            'run',
-                            delegationTask,
-                            '-m', OPENCODE_MODEL,
-                            '--file', agentsMdPath,
-                            '--file', continuityPath
-                        ];
-                        const child = spawn('opencode', delegationArgs, {
-                            cwd: PIXEL_ROOT,
-                            env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
-                        });
-                        let stdout = '';
-                        let stderr = '';
-                        child.stdout.on('data', (data) => { stdout += data.toString(); });
-                        child.stderr.on('data', (data) => { stderr += data.toString(); });
-                        const code = await new Promise((resolve) => {
-                            child.on('close', resolve);
-                        });
-                        delegationSuccess = code === 0;
-                        delegationSummary = stdout.substring(0, 2000);
-                        if (stderr) {
-                            delegationSummary += `\n[STDERR]: ${stderr.substring(0, 500)}`;
-                        }
-                    }
-                    catch (execError) {
-                        delegationSuccess = false;
-                        delegationSummary = `Execution failed: ${execError.message}`;
-                    }
-                    // Update status based on result
-                    const finalContent = await fs.readFile(QUEUE_PATH, 'utf-8');
-                    const newStatus = delegationSuccess ? '✅ DONE' : '❌ FAILED';
-                    const finalUpdatedContent = finalContent.replace(`### ${taskId}: ${headerMatch[1]} 🟡 IN_PROGRESS`, `### ${taskId}: ${headerMatch[1]} ${newStatus}`);
-                    // Update Last Processed timestamp
-                    const timestampUpdated = finalUpdatedContent.replace(/\*\*Last Processed\*\*: .*/, `**Last Processed**: ${new Date().toISOString()} (${taskId})`);
-                    await fs.writeFile(QUEUE_PATH, timestampUpdated);
-                    await syncAll(); // Sync any code changes made
-                    await logAudit({
-                        type: 'refactor_task_complete',
-                        taskId,
-                        success: delegationSuccess,
-                        summary: delegationSummary.substring(0, 500)
+${verifyCommand || 'No verification specified - manually confirm changes work'}
+
+IMPORTANT: After you finish, update /pixel/REFACTOR_QUEUE.md:
+- Change "🟡 IN_PROGRESS" to "✅ DONE" (if successful) or "❌ FAILED" (if failed)
+- Update "**Last Processed**:" with current timestamp and task ID`;
+                    // Use the worker tools directly
+                    const { spawnWorkerInternal } = await import('./worker-tools');
+                    const workerResult = await spawnWorkerInternal({
+                        task: workerTask,
+                        context: `Refactoring task from REFACTOR_QUEUE.md. Task ID: ${taskId}`,
+                        priority: 'normal'
                     });
+                    if ('error' in workerResult) {
+                        // Worker spawn failed - revert to READY status
+                        const revertContent = await fs.readFile(QUEUE_PATH, 'utf-8');
+                        const revertedContent = revertContent.replace(`### ${taskId}: ${headerMatch[1]} 🟡 IN_PROGRESS`, `### ${taskId}: ${headerMatch[1]} ⬜ READY`);
+                        await fs.writeFile(QUEUE_PATH, revertedContent);
+                        return {
+                            error: `Failed to spawn worker: ${workerResult.error}`,
+                            taskId,
+                            status: 'Reverted to READY'
+                        };
+                    }
+                    // Worker spawned successfully - it will update the queue when done
                     return {
                         taskId,
-                        status: newStatus,
-                        success: delegationSuccess,
-                        summary: delegationSummary
+                        status: '🟡 IN_PROGRESS',
+                        workerTaskId: workerResult.taskId,
+                        message: `Worker spawned for ${taskId}. Use checkWorkerStatus("${workerResult.taskId}") to monitor progress. Worker will update REFACTOR_QUEUE.md when complete.`
                     };
                 }
                 return { error: 'Invalid action' };
@@ -1264,5 +861,109 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
                 return { error: error.message };
             }
         }
-    })
+    }),
+    readDiary: tool({
+        description: 'Read diary entries from Pixel agent. Use this to access reflections, notes, and evolutionary insights.',
+        inputSchema: z.object({
+            limit: z.number().optional().describe('Maximum number of entries to return (default: 10)'),
+            author: z.string().optional().describe('Filter by author (e.g., "Pixel", "Syntropy")'),
+            since: z.string().optional().describe('ISO date string to filter entries created after (e.g., "2025-01-01T00:00:00Z")')
+        }),
+        execute: async ({ limit, author, since }) => {
+            console.log(`[SYNTROPY] Tool: readDiary (limit=${limit || 10}, author=${author || 'any'}, since=${since || 'any'})`);
+            try {
+                const query = 'SELECT * FROM diary_entries';
+                const conditions = [];
+                const values = [];
+                if (author) {
+                    conditions.push(`author = $${values.length + 1}`);
+                    values.push(author);
+                }
+                if (since) {
+                    conditions.push(`created_at >= $${values.length + 1}`);
+                    values.push(since);
+                }
+                const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+                const limitClause = limit ? ` LIMIT ${limit}` : '';
+                const orderBy = ' ORDER BY created_at DESC';
+                const fullQuery = `${query}${whereClause}${orderBy}${limitClause}`;
+                const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+db.query(\`${fullQuery.replace(/'/g, "\\'").replace(/\$/g, '\\$')}\`, ${JSON.stringify(values)})
+  .then(r => console.log(JSON.stringify(r.rows)))
+  .catch(e => console.error('ERROR:', e.message));
+        `;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
+                if (stderr && stderr.includes('ERROR:')) {
+                    return { error: stderr };
+                }
+                const entries = JSON.parse(stdout.trim());
+                await logAudit({
+                    type: 'diary_read',
+                    author,
+                    count: entries.length,
+                    limit
+                });
+                return {
+                    entries,
+                    count: entries.length,
+                    filters: { author, since, limit }
+                };
+            }
+            catch (error) {
+                await logAudit({ type: 'diary_read_error', error: error.message });
+                return { error: `Failed to read diary: ${error.message}` };
+            }
+        }
+    }),
+    writeDiary: tool({
+        description: 'Write a new diary entry. Use this to record insights, learnings, or evolutionary steps.',
+        inputSchema: z.object({
+            author: z.string().describe('Author name (e.g., "Syntropy", "Pixel")'),
+            content: z.string().describe('Diary entry content'),
+            tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight"])')
+        }),
+        execute: async ({ author, content, tags = [] }) => {
+            console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')})`);
+            try {
+                const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+const id = crypto.randomUUID();
+const now = new Date().toISOString();
+db.query(
+  \`INSERT INTO diary_entries (id, author, content, tags, created_at, updated_at) VALUES ('\${id}', '\${author}', '\${content}', '\${JSON.stringify(tags)}'::text[], '\${now}', '\${now}')\`
+)
+  .then(() => console.log(JSON.stringify({ id, success: true })))
+  .catch(e => console.error('ERROR:', e.message));
+        `;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
+                if (stderr && stderr.includes('ERROR:')) {
+                    return { error: stderr };
+                }
+                const result = JSON.parse(stdout.trim());
+                await logAudit({
+                    type: 'diary_write',
+                    author,
+                    tags,
+                    entryId: result.id,
+                    success: true
+                });
+                return {
+                    success: true,
+                    id: result.id,
+                    author,
+                    content,
+                    tags
+                };
+            }
+            catch (error) {
+                await logAudit({ type: 'diary_write_error', error: error.message });
+                return { error: `Failed to write diary: ${error.message}` };
+            }
+        }
+    }),
+    // Worker Architecture Tools (Brain/Hands pattern)
+    ...workerTools
 };
