@@ -26,21 +26,21 @@ export interface Task {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
-  
+
   type: 'opencode' | 'docker-op' | 'git-op' | 'syntropy-rebuild';
   payload: {
     task: string;
     context?: string;
   };
-  
+
   workerId?: string;
   workerPid?: number;
-  
+
   exitCode?: number;
   output?: string;
   summary?: string;
   error?: string;
-  
+
   attempts: number;
   maxAttempts: number;
   lastAttemptError?: string;
@@ -168,10 +168,10 @@ interface SpawnWorkerError {
  */
 export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<SpawnWorkerResult | SpawnWorkerError> {
   const { task, context, priority = 'normal' } = params;
-  
+
   console.log(`[SYNTROPY] spawnWorkerInternal (priority=${priority})`);
   console.log(`[SYNTROPY] Task: ${task.substring(0, 200)}...`);
-  
+
   // 1. Enforce single-worker-at-a-time
   const ledger = await readTaskLedger();
   const lockTaskId = crypto.randomUUID();
@@ -185,7 +185,7 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
       runningTaskStatus: runningTasks[0]?.status,
     };
   }
-  
+
   // 2. Generate task ID and create ledger entry
   const taskId = crypto.randomUUID();
   const newTask: Task = {
@@ -197,34 +197,40 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
     attempts: 0,
     maxAttempts: 3,
   };
-  
+
   ledger.tasks.push(newTask);
   await writeTaskLedger(ledger);
   await logAudit({ type: 'worker_task_created', taskId, task: task.substring(0, 500) });
-  
+
   // Update lock to track the real taskId (worker will clear this lock when it exits)
   await fs.writeFile(WORKER_LOCK_PATH, JSON.stringify({ taskId, createdAt: new Date().toISOString() }, null, 2));
 
   // 3. Spawn worker container
   const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
-  
+
   console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
-  
+
+  // HOST_PIXEL_ROOT is the absolute host path where /pixel is mounted.
+  // Docker compose needs this because relative paths (.) resolve to the
+  // container's PWD when running via docker socket, not the host's real path.
+  const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
+
   const proc = spawn('docker', [
     'compose', '--profile', 'worker',
     'run', '-d',
     '--name', containerName,
     // NOTE: no --rm; keeping container allows `docker compose logs -f worker`
     '-e', `TASK_ID=${taskId}`,
+    '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
     'worker'
   ], { cwd: PIXEL_ROOT });
-  
+
   let spawnOutput = '';
   let spawnError = '';
-  
+
   proc.stdout.on('data', (d) => { spawnOutput += d.toString(); });
   proc.stderr.on('data', (d) => { spawnError += d.toString(); });
-  
+
   try {
     await new Promise<void>((resolve, reject) => {
       proc.on('close', (code) => {
@@ -239,10 +245,10 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   } catch (err: any) {
     return { error: err.message };
   }
-  
+
   console.log(`[SYNTROPY] Worker spawned successfully: ${containerName}`);
   await logAudit({ type: 'worker_spawned', taskId, containerName });
-  
+
   return {
     taskId,
     containerName,
@@ -287,32 +293,32 @@ export const checkWorkerStatus = tool({
   
 Returns the current status, untruncated summary (if available), output tail (if completed), and any errors.
 Use this to monitor workers spawned with spawnWorker.`,
-  
+
   inputSchema: z.object({
     taskId: z.string().describe('The task ID returned by spawnWorker'),
   }),
-  
+
   execute: async ({ taskId }) => {
     console.log(`[SYNTROPY] Tool: checkWorkerStatus (${taskId})`);
-    
+
     const ledger = await readTaskLedger();
     const task = ledger.tasks.find(t => t.id === taskId);
-    
+
     if (!task) {
       return { error: `Task ${taskId} not found in ledger` };
     }
-    
+
     // If running, check if container still exists
     if (task.status === 'running' && task.workerId) {
       const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
       const containerStatus = await getContainerStatus(containerName);
-      
+
       if (!containerStatus.exists || containerStatus.exited) {
         // Container died - update ledger
         task.status = containerStatus.exitCode === 0 ? 'completed' : 'failed';
         task.exitCode = containerStatus.exitCode;
         task.completedAt = new Date().toISOString();
-        
+
         // Try to read output file
         const outputPath = path.join(PIXEL_ROOT, 'data', `worker-output-${taskId}.txt`);
         if (await fs.pathExists(outputPath)) {
@@ -325,12 +331,12 @@ Use this to monitor workers spawned with spawnWorker.`,
             task.summary = output.slice(match.index);
           }
         }
-        
+
         await writeTaskLedger(ledger);
         await logAudit({ type: 'worker_status_updated', taskId, status: task.status, exitCode: task.exitCode });
       }
     }
-    
+
     return {
       taskId: task.id,
       status: task.status,
@@ -352,28 +358,28 @@ export const listWorkerTasks = tool({
   description: `List all worker tasks in the ledger.
   
 Shows recent tasks with their status, useful for monitoring and debugging.`,
-  
+
   inputSchema: z.object({
     status: z.enum(['all', 'pending', 'running', 'completed', 'failed']).default('all').describe('Filter by status'),
     limit: z.number().default(10).describe('Maximum number of tasks to return'),
   }),
-  
+
   execute: async ({ status, limit }) => {
     console.log(`[SYNTROPY] Tool: listWorkerTasks (status=${status}, limit=${limit})`);
-    
+
     const ledger = await readTaskLedger();
     let tasks = ledger.tasks;
-    
+
     if (status !== 'all') {
       tasks = tasks.filter(t => t.status === status);
     }
-    
+
     // Sort by createdAt descending
     tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    
+
     // Limit
     tasks = tasks.slice(0, limit);
-    
+
     return {
       total: ledger.tasks.length,
       filtered: tasks.length,
@@ -401,20 +407,20 @@ This is the ONLY safe way to update Syntropy's code. The process:
 
 Use this when syntropy-core code has changed and needs deployment.
 WARNING: Current Syntropy process will be replaced during this operation.`,
-  
+
   inputSchema: z.object({
     reason: z.string().describe('Why the rebuild is needed (e.g., "new tool added", "bug fix in tools.ts")'),
     gitRef: z.string().optional().describe('Git ref to checkout (default: current branch, pulls latest)'),
   }),
-  
+
   execute: async ({ reason, gitRef }) => {
     console.log(`[SYNTROPY] Tool: scheduleSelfRebuild (reason=${reason})`);
-    
+
     // 1. Save current state to CONTINUITY.md
-    const existingContinuity = await fs.pathExists(CONTINUITY_PATH) 
-      ? await fs.readFile(CONTINUITY_PATH, 'utf-8') 
+    const existingContinuity = await fs.pathExists(CONTINUITY_PATH)
+      ? await fs.readFile(CONTINUITY_PATH, 'utf-8')
       : '';
-    
+
     const rebuildNote = `
 ## Self-Rebuild Scheduled
 
@@ -428,14 +434,14 @@ Previous context preserved below.
 
 ${existingContinuity}
 `;
-    
+
     await fs.writeFile(CONTINUITY_PATH, rebuildNote);
     await logAudit({ type: 'syntropy_rebuild_scheduled', reason, gitRef });
-    
+
     // 2. Create rebuild task
     const taskId = crypto.randomUUID();
     const ledger = await readTaskLedger();
-    
+
     const rebuildTask: Task = {
       id: taskId,
       status: 'pending',
@@ -467,27 +473,30 @@ The new Syntropy will read CONTINUITY.md to restore context.
       attempts: 0,
       maxAttempts: 1, // Self-rebuild should not auto-retry
     };
-    
+
     ledger.tasks.push(rebuildTask);
     await writeTaskLedger(ledger);
-    
+
     // 3. Spawn the rebuild worker
     const containerName = `pixel-worker-rebuild-${taskId.slice(0, 8)}`;
-    
+
     console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
-    
+
+    const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
+
     const proc = spawn('docker', [
       'compose', '--profile', 'worker',
       'run', '-d',
       '--name', containerName,
       // NOTE: no --rm; keep container for log inspection
       '-e', `TASK_ID=${taskId}`,
+      '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
       'worker'
     ], { cwd: PIXEL_ROOT });
-    
+
     let spawnError = '';
     proc.stderr.on('data', (d) => { spawnError += d.toString(); });
-    
+
     const spawnResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
       proc.on('close', (code) => {
         if (code === 0) {
@@ -500,14 +509,14 @@ The new Syntropy will read CONTINUITY.md to restore context.
         resolve({ success: false, error: e.message });
       });
     });
-    
+
     if (!spawnResult.success) {
       return {
         error: `Failed to spawn rebuild worker: ${spawnResult.error}`,
         taskId,
       };
     }
-    
+
     return {
       scheduled: true,
       taskId,
@@ -524,33 +533,33 @@ export const cleanupStaleTasks = tool({
 Marks stuck 'running' tasks as 'aborted' if their container no longer exists.
 Removes old completed/failed tasks older than the retention period.
 Run this periodically to keep the ledger clean.`,
-  
+
   inputSchema: z.object({
     retentionDays: z.number().default(7).describe('Remove completed/failed tasks older than this many days'),
   }),
-  
+
   execute: async ({ retentionDays }) => {
     console.log(`[SYNTROPY] Tool: cleanupStaleTasks (retention=${retentionDays} days)`);
-    
+
     const ledger = await readTaskLedger();
     const now = Date.now();
     const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
-    
+
     let aborted = 0;
     let removed = 0;
-    
+
     // Check running tasks for missing containers
     for (const task of ledger.tasks) {
       if (task.status === 'running') {
         const containerName = `pixel-worker-${task.id.slice(0, 8)}`;
         const status = await getContainerStatus(containerName);
-        
+
         if (!status.exists) {
           task.status = 'aborted';
           task.error = 'Worker container disappeared (possible crash/restart)';
           task.completedAt = new Date().toISOString();
           aborted++;
-          
+
           await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_missing' });
         } else if (status.exited) {
           task.status = 'aborted';
@@ -563,7 +572,7 @@ Run this periodically to keep the ledger clean.`,
         }
       }
     }
-    
+
     // Remove old completed/failed tasks
     const tasksToKeep = ledger.tasks.filter(task => {
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'aborted') {
@@ -575,12 +584,12 @@ Run this periodically to keep the ledger clean.`,
       }
       return true;
     });
-    
+
     ledger.tasks = tasksToKeep;
     await writeTaskLedger(ledger);
-    
+
     await logAudit({ type: 'worker_cleanup', aborted, removed });
-    
+
     return {
       success: true,
       aborted,
@@ -607,37 +616,37 @@ This is useful for debugging worker tasks and seeing what opencode did.`,
 
   execute: async ({ taskId, lines }) => {
     console.log(`[SYNTROPY] Tool: readWorkerLogs (taskId=${taskId}, lines=${lines})`);
-    
+
     const LOGS_DIR = path.join(PIXEL_ROOT, 'logs');
     let logPath: string;
-    
+
     if (taskId === 'live') {
       logPath = path.join(LOGS_DIR, 'opencode_live.log');
     } else {
       // Try task-specific log first
       const shortId = taskId.slice(0, 8);
       logPath = path.join(LOGS_DIR, `worker-${shortId}.log`);
-      
+
       // Fall back to data output file if task-specific log doesn't exist
       if (!await fs.pathExists(logPath)) {
         logPath = path.join(PIXEL_ROOT, 'data', `worker-output-${taskId}.txt`);
       }
     }
-    
+
     if (!await fs.pathExists(logPath)) {
-      return { 
+      return {
         error: `Log file not found: ${logPath}`,
-        hint: taskId === 'live' 
-          ? 'No workers have run yet' 
+        hint: taskId === 'live'
+          ? 'No workers have run yet'
           : `Worker ${taskId} may not have started or logs were cleaned up`
       };
     }
-    
+
     try {
       const content = await fs.readFile(logPath, 'utf-8');
       const allLines = content.split('\n');
       const requestedLines = allLines.slice(-lines);
-      
+
       return {
         logPath,
         totalLines: allLines.length,
