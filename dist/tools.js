@@ -1,10 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, OPENCODE_LIVE_LOG, AUDIT_LOG_PATH } from './config';
+import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR, DB_PATH, LOG_PATH, OPENCODE_LIVE_LOG, AUDIT_LOG_PATH, OPENCODE_MODEL, OPENCODE_INTERNAL_LOG_DIR } from './config';
 import { logAudit, syncAll } from './utils';
 const execAsync = promisify(exec);
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
@@ -462,7 +462,7 @@ The response summary should be recorded in your Knowledge Base for future refere
             console.log(`[SYNTROPY] Delegating to Opencode Agent (CLI): ${task}`);
             await logAudit({ type: 'opencode_delegation_start', task });
             try {
-                const { spawn } = require('child_process');
+                const delegationStartMs = Date.now();
                 // Build context briefing for the dumber model
                 const briefing = `
 CONTEXT BRIEFING (Read AGENTS.md for full ops reference):
@@ -486,27 +486,199 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
                 const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
                 const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
                 const fileFlags = `--file ${agentsMdPath} --file ${continuityPath}`;
+                const readTailBytes = async (filePath, maxBytes) => {
+                    const fd = await fs.open(filePath, 'r');
+                    try {
+                        const stat = await fs.stat(filePath);
+                        const start = Math.max(0, stat.size - maxBytes);
+                        const length = stat.size - start;
+                        const buffer = Buffer.alloc(length);
+                        await fs.read(fd, buffer, 0, length, start);
+                        return buffer.toString('utf-8');
+                    }
+                    finally {
+                        await fs.close(fd);
+                    }
+                };
+                const getLatestInternalOpencodeLog = async () => {
+                    try {
+                        const dirExists = await fs.pathExists(OPENCODE_INTERNAL_LOG_DIR);
+                        if (!dirExists)
+                            return null;
+                        const entries = await fs.readdir(OPENCODE_INTERNAL_LOG_DIR);
+                        const candidatePaths = [];
+                        for (const name of entries) {
+                            if (!name.endsWith('.log'))
+                                continue;
+                            const filePath = path.join(OPENCODE_INTERNAL_LOG_DIR, name);
+                            try {
+                                const stat = await fs.stat(filePath);
+                                // Only consider logs created/updated during or after this delegation.
+                                if (stat.mtimeMs >= delegationStartMs - 5_000) {
+                                    candidatePaths.push({ filePath, mtimeMs: stat.mtimeMs });
+                                }
+                            }
+                            catch {
+                                // Ignore races / permissions
+                            }
+                        }
+                        if (candidatePaths.length === 0)
+                            return null;
+                        candidatePaths.sort((a, b) => b.mtimeMs - a.mtimeMs);
+                        const chosen = candidatePaths[0].filePath;
+                        const maxBytes = Number.parseInt(process.env.OPENCODE_INTERNAL_TAIL_BYTES || '32768', 10);
+                        const tail = await readTailBytes(chosen, Number.isFinite(maxBytes) ? maxBytes : 32768);
+                        const hasError = /\bERROR\b|NotFoundError|Unhandled rejection/i.test(tail);
+                        const asksPermission = /service=permission\b|pattern=\["\/","\/\*"\]/i.test(tail);
+                        return { path: chosen, tail, hasError, asksPermission };
+                    }
+                    catch {
+                        return null;
+                    }
+                };
                 return new Promise((resolve, reject) => {
-                    const escapedBriefing = briefing.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
-                    const cmd = `opencode run ${fileFlags} "${escapedBriefing}" < /dev/null`;
-                    const child = spawn(cmd, [], {
+                    const args = [
+                        'run',
+                        briefing,
+                        '-m', OPENCODE_MODEL,
+                        '--file', agentsMdPath,
+                        '--file', continuityPath
+                    ];
+                    const child = spawn('opencode', args, {
                         env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
-                        shell: true,
-                        cwd: PIXEL_ROOT
+                        cwd: PIXEL_ROOT,
+                        stdio: ['ignore', 'pipe', 'pipe']
                     });
+                    const pid = child.pid ?? null;
+                    const startIso = new Date(delegationStartMs).toISOString();
+                    console.log(`[SYNTROPY] Opencode spawned (pid=${pid ?? 'unknown'}) model=${OPENCODE_MODEL} started=${startIso}`);
+                    logStream.write(`PID: ${pid ?? 'unknown'}\nMODEL: ${OPENCODE_MODEL}\nSTART: ${startIso}\n\n`);
+                    void logAudit({ type: 'opencode_delegation_spawn', task, pid, model: OPENCODE_MODEL, startedAt: startIso });
+                    const clearAllTimers = [];
+                    const registerTimer = (timer) => {
+                        clearAllTimers.push(() => clearTimeout(timer));
+                    };
+                    const registerInterval = (timer) => {
+                        clearAllTimers.push(() => clearInterval(timer));
+                    };
+                    const abortRun = async (reason, details) => {
+                        try {
+                            console.warn(`[SYNTROPY] ⚠️  Aborting Opencode run: ${reason}`);
+                            await logAudit({ type: 'opencode_delegation_aborted', task, pid, reason, ...details });
+                        }
+                        catch {
+                            // best-effort
+                        }
+                        try {
+                            child.kill('SIGTERM');
+                        }
+                        catch {
+                            // ignore
+                        }
+                        // Escalate if still alive after grace period.
+                        const killDelayMs = Number.parseInt(process.env.OPENCODE_ABORT_KILL_MS || '5000', 10);
+                        const killTimer = setTimeout(() => {
+                            try {
+                                child.kill('SIGKILL');
+                            }
+                            catch {
+                                // ignore
+                            }
+                        }, Number.isFinite(killDelayMs) ? killDelayMs : 5000);
+                        registerTimer(killTimer);
+                    };
+                    // Guard: in headless mode, a permission prompt will never be answered and will hang forever.
+                    const guardEnabled = process.env.OPENCODE_PERMISSION_GUARD !== 'false';
+                    if (guardEnabled) {
+                        const intervalMs = Number.parseInt(process.env.OPENCODE_GUARD_INTERVAL_MS || '15000', 10);
+                        const guardInterval = setInterval(async () => {
+                            try {
+                                const internal = await getLatestInternalOpencodeLog();
+                                if (internal?.asksPermission) {
+                                    await abortRun('permission_prompt_detected', {
+                                        internalLogPath: internal.path,
+                                        internalTail: internal.tail.slice(-2000)
+                                    });
+                                }
+                            }
+                            catch {
+                                // ignore
+                            }
+                        }, Number.isFinite(intervalMs) ? intervalMs : 15000);
+                        registerInterval(guardInterval);
+                    }
+                    // Guard: optional overall timeout to prevent runaway sessions.
+                    const timeoutMsRaw = process.env.OPENCODE_TIMEOUT_MS;
+                    const timeoutMs = timeoutMsRaw ? Number.parseInt(timeoutMsRaw, 10) : 45 * 60 * 1000;
+                    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+                        const timeoutTimer = setTimeout(async () => {
+                            await abortRun('timeout', { timeoutMs });
+                        }, timeoutMs);
+                        registerTimer(timeoutTimer);
+                    }
+                    const streamConsole = process.env.OPENCODE_STREAM_CONSOLE !== 'false';
+                    const maxConsoleBytes = Number.parseInt(process.env.OPENCODE_MAX_CONSOLE_BYTES || '20000', 10);
+                    let consoleBytes = 0;
+                    const writeToConsole = (prefix, chunk) => {
+                        if (!streamConsole)
+                            return;
+                        if (!Number.isFinite(maxConsoleBytes) || maxConsoleBytes <= 0)
+                            return;
+                        if (consoleBytes >= maxConsoleBytes)
+                            return;
+                        const remaining = maxConsoleBytes - consoleBytes;
+                        const clipped = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+                        consoleBytes += clipped.length;
+                        // Prefix each line so docker logs are greppable.
+                        const prefixed = clipped.replace(/\n/g, `\n${prefix}`);
+                        process.stdout.write(`${prefix}${prefixed}`);
+                        if (consoleBytes >= maxConsoleBytes) {
+                            process.stdout.write(`\n[OPENCODE] (console output capped at ${maxConsoleBytes} bytes; see ${OPENCODE_LIVE_LOG})\n`);
+                        }
+                    };
                     let fullOutput = '';
                     child.stdout.on('data', (data) => {
                         const str = data.toString();
                         fullOutput += str;
                         logStream.write(str);
+                        writeToConsole('[OPENCODE] ', str);
                     });
                     child.stderr.on('data', (data) => {
                         const str = data.toString();
                         logStream.write(`[STDERR] ${str}`);
+                        writeToConsole('[OPENCODE:stderr] ', str);
                     });
                     child.on('close', async (code) => {
-                        logStream.write(`\n--- DELEGATION END: ${new Date().toISOString()} (Exit Code: ${code}) ---\n`);
+                        for (const clear of clearAllTimers)
+                            clear();
+                        const endedAtIso = new Date().toISOString();
+                        const durationMs = Date.now() - delegationStartMs;
+                        const internal = await getLatestInternalOpencodeLog();
+                        logStream.write(`\n--- DELEGATION END: ${endedAtIso} (Exit Code: ${code}) ---\n`);
+                        if (internal) {
+                            logStream.write(`\n--- OPENCODE INTERNAL LOG: ${internal.path} ---\n`);
+                            logStream.write(internal.tail);
+                            logStream.write(`\n--- END OPENCODE INTERNAL LOG ---\n`);
+                            const tailPreview = internal.tail.slice(-2000);
+                            console.log(`[SYNTROPY] Opencode internal log: ${internal.path}`);
+                            if (tailPreview.trim()) {
+                                console.log(`[SYNTROPY] Opencode internal tail (last ~2k chars):\n${tailPreview}`);
+                            }
+                            if (internal.hasError || internal.asksPermission) {
+                                console.warn('[SYNTROPY] ⚠️  Opencode internal log indicates errors and/or a permission prompt; check logs for details.');
+                            }
+                        }
                         logStream.end();
+                        await logAudit({
+                            type: 'opencode_delegation_exit',
+                            task,
+                            pid,
+                            code,
+                            durationMs,
+                            internalLogPath: internal?.path,
+                            internalHasError: internal?.hasError,
+                            internalAsksPermission: internal?.asksPermission
+                        });
                         if (code === 0) {
                             console.log('[SYNTROPY] Opencode task completed');
                             // Try to filter JSON lines if mixed content
@@ -515,6 +687,10 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
                             const filteredLines = lines.filter((l) => !l.startsWith('{') && !l.startsWith('['));
                             if (filteredLines.length > 0) {
                                 summary = filteredLines.join('\n');
+                            }
+                            if (!summary.trim() && internal?.tail) {
+                                // Opencode often logs to its internal file instead of stdout; surface it for visibility.
+                                summary = `Opencode produced no stdout. Internal log tail from ${internal.path}:\n\n${internal.tail.slice(-4000)}`;
                             }
                             await syncAll(); // Sync code changes
                             await logAudit({ type: 'opencode_delegation_success', task, summary: summary.slice(0, 2000) });
@@ -528,6 +704,8 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
                         }
                     });
                     child.on('error', (err) => {
+                        for (const clear of clearAllTimers)
+                            clear();
                         logStream.write(`[PROCESS ERROR] ${err.message}\n`);
                         logStream.end();
                         reject(err);
@@ -719,18 +897,30 @@ After completing the task:
 VERIFICATION COMMAND:
 ${verifyCommand || 'No verification specified - manually confirm changes work'}`;
                     // Call opencode directly
-                    const escapedTask = delegationTask.replace(/"/g, '\\"').replace(/\n/g, ' ').replace(/`/g, '\\`');
                     const agentsMdPath = path.resolve(PIXEL_ROOT, 'AGENTS.md');
                     const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
                     let delegationSuccess = false;
                     let delegationSummary = '';
                     try {
-                        const { stdout, stderr } = await execAsync(`opencode run --file ${agentsMdPath} --file ${continuityPath} "${escapedTask}" < /dev/null`, {
+                        const delegationArgs = [
+                            'run',
+                            delegationTask,
+                            '-m', OPENCODE_MODEL,
+                            '--file', agentsMdPath,
+                            '--file', continuityPath
+                        ];
+                        const child = spawn('opencode', delegationArgs, {
                             cwd: PIXEL_ROOT,
-                            timeout: 600000, // 10 minute timeout for complex tasks
                             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' }
                         });
-                        delegationSuccess = true;
+                        let stdout = '';
+                        let stderr = '';
+                        child.stdout.on('data', (data) => { stdout += data.toString(); });
+                        child.stderr.on('data', (data) => { stderr += data.toString(); });
+                        const code = await new Promise((resolve) => {
+                            child.on('close', resolve);
+                        });
+                        delegationSuccess = code === 0;
                         delegationSummary = stdout.substring(0, 2000);
                         if (stderr) {
                             delegationSummary += `\n[STDERR]: ${stderr.substring(0, 500)}`;

@@ -12,7 +12,8 @@ import {
   LOG_PATH,
   OPENCODE_LIVE_LOG,
   AUDIT_LOG_PATH,
-  OPENCODE_MODEL
+  OPENCODE_MODEL,
+  OPENCODE_INTERNAL_LOG_DIR
 } from './config';
 import { logAudit, syncAll } from './utils';
 
@@ -475,6 +476,8 @@ The response summary should be recorded in your Knowledge Base for future refere
 
       try {
 
+        const delegationStartMs = Date.now();
+
         // Build context briefing for the dumber model
         const briefing = `
 CONTEXT BRIEFING (Read AGENTS.md for full ops reference):
@@ -502,6 +505,58 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
         const continuityPath = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
         const fileFlags = `--file ${agentsMdPath} --file ${continuityPath}`;
 
+        const readTailBytes = async (filePath: string, maxBytes: number): Promise<string> => {
+          const fd = await fs.open(filePath, 'r');
+          try {
+            const stat = await fs.stat(filePath);
+            const start = Math.max(0, stat.size - maxBytes);
+            const length = stat.size - start;
+            const buffer = Buffer.alloc(length);
+            await fs.read(fd, buffer, 0, length, start);
+            return buffer.toString('utf-8');
+          } finally {
+            await fs.close(fd);
+          }
+        };
+
+        const getLatestInternalOpencodeLog = async (): Promise<{ path: string; tail: string; hasError: boolean; asksPermission: boolean } | null> => {
+          try {
+            const dirExists = await fs.pathExists(OPENCODE_INTERNAL_LOG_DIR);
+            if (!dirExists) return null;
+
+            const entries = await fs.readdir(OPENCODE_INTERNAL_LOG_DIR);
+            const candidatePaths: Array<{ filePath: string; mtimeMs: number }> = [];
+
+            for (const name of entries) {
+              if (!name.endsWith('.log')) continue;
+              const filePath = path.join(OPENCODE_INTERNAL_LOG_DIR, name);
+              try {
+                const stat = await fs.stat(filePath);
+                // Only consider logs created/updated during or after this delegation.
+                if (stat.mtimeMs >= delegationStartMs - 5_000) {
+                  candidatePaths.push({ filePath, mtimeMs: stat.mtimeMs });
+                }
+              } catch {
+                // Ignore races / permissions
+              }
+            }
+
+            if (candidatePaths.length === 0) return null;
+            candidatePaths.sort((a, b) => b.mtimeMs - a.mtimeMs);
+            const chosen = candidatePaths[0].filePath;
+
+            const maxBytes = Number.parseInt(process.env.OPENCODE_INTERNAL_TAIL_BYTES || '32768', 10);
+            const tail = await readTailBytes(chosen, Number.isFinite(maxBytes) ? maxBytes : 32768);
+
+            const hasError = /\bERROR\b|NotFoundError|Unhandled rejection/i.test(tail);
+            const asksPermission = /service=permission\b|pattern=\["\/","\/\*"\]/i.test(tail);
+
+            return { path: chosen, tail, hasError, asksPermission };
+          } catch {
+            return null;
+          }
+        };
+
         return new Promise((resolve, reject) => {
           const args = [
             'run',
@@ -517,22 +572,149 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
             stdio: ['ignore', 'pipe', 'pipe']
           });
 
+          const pid = child.pid ?? null;
+          const startIso = new Date(delegationStartMs).toISOString();
+          console.log(`[SYNTROPY] Opencode spawned (pid=${pid ?? 'unknown'}) model=${OPENCODE_MODEL} started=${startIso}`);
+          logStream.write(`PID: ${pid ?? 'unknown'}\nMODEL: ${OPENCODE_MODEL}\nSTART: ${startIso}\n\n`);
+          void logAudit({ type: 'opencode_delegation_spawn', task, pid, model: OPENCODE_MODEL, startedAt: startIso });
+
+          const clearAllTimers: Array<() => void> = [];
+          const registerTimer = (timer: NodeJS.Timeout) => {
+            clearAllTimers.push(() => clearTimeout(timer));
+          };
+          const registerInterval = (timer: NodeJS.Timeout) => {
+            clearAllTimers.push(() => clearInterval(timer));
+          };
+
+          const abortRun = async (reason: string, details?: any) => {
+            try {
+              console.warn(`[SYNTROPY] ⚠️  Aborting Opencode run: ${reason}`);
+              await logAudit({ type: 'opencode_delegation_aborted', task, pid, reason, ...details });
+            } catch {
+              // best-effort
+            }
+
+            try {
+              child.kill('SIGTERM');
+            } catch {
+              // ignore
+            }
+
+            // Escalate if still alive after grace period.
+            const killDelayMs = Number.parseInt(process.env.OPENCODE_ABORT_KILL_MS || '5000', 10);
+            const killTimer = setTimeout(() => {
+              try {
+                child.kill('SIGKILL');
+              } catch {
+                // ignore
+              }
+            }, Number.isFinite(killDelayMs) ? killDelayMs : 5000);
+            registerTimer(killTimer);
+          };
+
+          // Guard: in headless mode, a permission prompt will never be answered and will hang forever.
+          const guardEnabled = process.env.OPENCODE_PERMISSION_GUARD !== 'false';
+          if (guardEnabled) {
+            const intervalMs = Number.parseInt(process.env.OPENCODE_GUARD_INTERVAL_MS || '15000', 10);
+            const guardInterval = setInterval(async () => {
+              try {
+                const internal = await getLatestInternalOpencodeLog();
+                if (internal?.asksPermission) {
+                  await abortRun('permission_prompt_detected', {
+                    internalLogPath: internal.path,
+                    internalTail: internal.tail.slice(-2000)
+                  });
+                }
+              } catch {
+                // ignore
+              }
+            }, Number.isFinite(intervalMs) ? intervalMs : 15000);
+            registerInterval(guardInterval);
+          }
+
+          // Guard: optional overall timeout to prevent runaway sessions.
+          const timeoutMsRaw = process.env.OPENCODE_TIMEOUT_MS;
+          const timeoutMs = timeoutMsRaw ? Number.parseInt(timeoutMsRaw, 10) : 45 * 60 * 1000;
+          if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+            const timeoutTimer = setTimeout(async () => {
+              await abortRun('timeout', { timeoutMs });
+            }, timeoutMs);
+            registerTimer(timeoutTimer);
+          }
+
+          const streamConsole = process.env.OPENCODE_STREAM_CONSOLE !== 'false';
+          const maxConsoleBytes = Number.parseInt(process.env.OPENCODE_MAX_CONSOLE_BYTES || '20000', 10);
+          let consoleBytes = 0;
+
+          const writeToConsole = (prefix: string, chunk: string) => {
+            if (!streamConsole) return;
+            if (!Number.isFinite(maxConsoleBytes) || maxConsoleBytes <= 0) return;
+            if (consoleBytes >= maxConsoleBytes) return;
+
+            const remaining = maxConsoleBytes - consoleBytes;
+            const clipped = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+            consoleBytes += clipped.length;
+
+            // Prefix each line so docker logs are greppable.
+            const prefixed = clipped.replace(/\n/g, `\n${prefix}`);
+            process.stdout.write(`${prefix}${prefixed}`);
+
+            if (consoleBytes >= maxConsoleBytes) {
+              process.stdout.write(`\n[OPENCODE] (console output capped at ${maxConsoleBytes} bytes; see ${OPENCODE_LIVE_LOG})\n`);
+            }
+          };
+
           let fullOutput = '';
 
           child.stdout.on('data', (data: any) => {
             const str = data.toString();
             fullOutput += str;
             logStream.write(str);
+            writeToConsole('[OPENCODE] ', str);
           });
 
           child.stderr.on('data', (data: any) => {
             const str = data.toString();
             logStream.write(`[STDERR] ${str}`);
+            writeToConsole('[OPENCODE:stderr] ', str);
           });
 
           child.on('close', async (code: number) => {
-            logStream.write(`\n--- DELEGATION END: ${new Date().toISOString()} (Exit Code: ${code}) ---\n`);
+            for (const clear of clearAllTimers) clear();
+
+            const endedAtIso = new Date().toISOString();
+            const durationMs = Date.now() - delegationStartMs;
+            const internal = await getLatestInternalOpencodeLog();
+
+            logStream.write(`\n--- DELEGATION END: ${endedAtIso} (Exit Code: ${code}) ---\n`);
+            if (internal) {
+              logStream.write(`\n--- OPENCODE INTERNAL LOG: ${internal.path} ---\n`);
+              logStream.write(internal.tail);
+              logStream.write(`\n--- END OPENCODE INTERNAL LOG ---\n`);
+
+              const tailPreview = internal.tail.slice(-2000);
+              console.log(`[SYNTROPY] Opencode internal log: ${internal.path}`);
+              if (tailPreview.trim()) {
+                console.log(`[SYNTROPY] Opencode internal tail (last ~2k chars):\n${tailPreview}`);
+              }
+
+              if (internal.hasError || internal.asksPermission) {
+                console.warn('[SYNTROPY] ⚠️  Opencode internal log indicates errors and/or a permission prompt; check logs for details.');
+              }
+            }
+
             logStream.end();
+
+            await logAudit({
+              type: 'opencode_delegation_exit',
+              task,
+              pid,
+              code,
+              durationMs,
+              internalLogPath: internal?.path,
+              internalHasError: internal?.hasError,
+              internalAsksPermission: internal?.asksPermission
+            });
 
             if (code === 0) {
               console.log('[SYNTROPY] Opencode task completed');
@@ -542,6 +724,11 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
               const filteredLines = lines.filter((l: string) => !l.startsWith('{') && !l.startsWith('['));
               if (filteredLines.length > 0) {
                 summary = filteredLines.join('\n');
+              }
+
+              if (!summary.trim() && internal?.tail) {
+                // Opencode often logs to its internal file instead of stdout; surface it for visibility.
+                summary = `Opencode produced no stdout. Internal log tail from ${internal.path}:\n\n${internal.tail.slice(-4000)}`;
               }
 
               await syncAll(); // Sync code changes
@@ -556,6 +743,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
           });
 
           child.on('error', (err: any) => {
+            for (const clear of clearAllTimers) clear();
             logStream.write(`[PROCESS ERROR] ${err.message}\n`);
             logStream.end();
             reject(err);

@@ -17,6 +17,19 @@ State tracking is maintained in the root [CONTINUITY.md](../CONTINUITY.md).
 - **Treasury Management**: Monitoring sat flow in the LNPixels database.
 - **Opencode Integration**: Delegate complex coding tasks to the Opencode AI Agent.
 
+## Opencode Visibility
+When Syntropy delegates to Opencode, it now records extra runtime visibility so you can debug “completed but unclear output” situations from container logs.
+
+- Live append-only delegation log: `logs/opencode_live.log`
+- Opencode internal log dir (inside container): `/tmp/.local/share/opencode/log`
+- Audit entries emitted: `opencode_delegation_spawn`, `opencode_delegation_exit` (plus existing success/error events)
+
+Optional env toggles:
+- `OPENCODE_STREAM_CONSOLE=false` disables streaming Opencode stdout/stderr into `docker logs`
+- `OPENCODE_MAX_CONSOLE_BYTES=20000` caps streamed console output
+- `OPENCODE_INTERNAL_LOG_DIR=/tmp/.local/share/opencode/log` override internal log directory
+- `OPENCODE_INTERNAL_TAIL_BYTES=32768` tail bytes captured from Opencode internal logs
+
 ## Current Stack (December 2025)
 - **Runtime**: Bun v1.3+
 - **Intelligence**: AI SDK (OpenAI gpt-5-mini-mini)
