@@ -24,34 +24,20 @@ const CONTINUITY_PATH = isDocker
   : path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
 
 // Opencode concurrency control: allow only one Opencode run at a time.
-// This prevents multiple `delegateToOpencode` tool calls from spawning parallel Opencode processes.
-let opencodeQueue: Promise<unknown> = Promise.resolve();
-let opencodeQueueDepth = 0;
-
+// IMPORTANT: No queue. If Opencode is already running, new delegations are rejected.
 const OPENCODE_DELEGATION_LOCK_PATH =
   process.env.OPENCODE_DELEGATION_LOCK_PATH || '/tmp/syntropy-opencode-delegation.lock';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const acquireOpencodeLock = async (task: string) => {
-  const maxWaitMs = Number.parseInt(process.env.OPENCODE_LOCK_WAIT_MS || '900000', 10); // 15 min
+const tryAcquireOpencodeLock = async (task: string) => {
   const staleMs = Number.parseInt(process.env.OPENCODE_LOCK_STALE_MS || String(2 * 60 * 60 * 1000), 10); // 2h
-  const pollMs = Number.parseInt(process.env.OPENCODE_LOCK_POLL_MS || '1000', 10);
-
-  const started = Date.now();
   const payload = {
     pid: process.pid,
     startedAt: new Date().toISOString(),
     task: task.slice(0, 1000)
   };
 
-  // Best-effort advisory lock using an exclusive create.
-  // Falls back to waiting until the lock disappears.
-  // Also clears stale locks to avoid permanent deadlocks after crashes.
-  // NOTE: This is intentionally simple and local to the container.
-  while (true) {
+  const attempt = async (): Promise<{ path: string; release: () => Promise<void> } | null> => {
     try {
-      // Ensure parent dir exists (e.g. if an alternate lock path is configured).
       await fs.ensureDir(path.dirname(OPENCODE_DELEGATION_LOCK_PATH));
 
       const fd = await fs.open(OPENCODE_DELEGATION_LOCK_PATH, 'wx');
@@ -72,67 +58,43 @@ const acquireOpencodeLock = async (task: string) => {
         }
       };
     } catch (error: any) {
-      const isExists = error?.code === 'EEXIST';
-      if (!isExists) throw error;
-
-      // Check staleness
-      try {
-        const stat = await fs.stat(OPENCODE_DELEGATION_LOCK_PATH);
-        const ageMs = Date.now() - stat.mtimeMs;
-        if (Number.isFinite(staleMs) && staleMs > 0 && ageMs > staleMs) {
-          let staleContents: string | undefined;
-          try {
-            staleContents = await fs.readFile(OPENCODE_DELEGATION_LOCK_PATH, 'utf-8');
-          } catch {
-            // ignore
-          }
-
-          console.warn(`[SYNTROPY] ⚠️  Removing stale Opencode lock (age=${ageMs}ms): ${OPENCODE_DELEGATION_LOCK_PATH}`);
-          await logAudit({
-            type: 'opencode_lock_stale_removed',
-            lockPath: OPENCODE_DELEGATION_LOCK_PATH,
-            ageMs,
-            staleContents: staleContents?.slice(0, 2000)
-          });
-          await fs.remove(OPENCODE_DELEGATION_LOCK_PATH);
-          continue;
-        }
-      } catch {
-        // ignore stat/read issues
-      }
-
-      if (Number.isFinite(maxWaitMs) && maxWaitMs > 0 && Date.now() - started > maxWaitMs) {
-        throw new Error(`Timed out waiting for Opencode lock: ${OPENCODE_DELEGATION_LOCK_PATH}`);
-      }
-
-      await sleep(Number.isFinite(pollMs) && pollMs > 0 ? pollMs : 1000);
+      if (error?.code !== 'EEXIST') throw error;
+      return null;
     }
-  }
-};
+  };
 
-const enqueueOpencode = async <T>(task: string, fn: () => Promise<T>): Promise<T> => {
-  const position = ++opencodeQueueDepth;
-  if (position > 1) {
-    console.log(`[SYNTROPY] Opencode busy; queued delegation (ahead=${position - 1}).`);
-    void logAudit({ type: 'opencode_delegation_queued', task, ahead: position - 1 });
-  }
+  // First attempt
+  let lock = await attempt();
+  if (lock) return lock;
 
-  const run = opencodeQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const lock = await acquireOpencodeLock(task);
+  // If locked, check for staleness and clear if needed, then retry once.
+  try {
+    const stat = await fs.stat(OPENCODE_DELEGATION_LOCK_PATH);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (Number.isFinite(staleMs) && staleMs > 0 && ageMs > staleMs) {
+      let staleContents: string | undefined;
       try {
-        return await fn();
-      } finally {
-        await lock.release();
+        staleContents = await fs.readFile(OPENCODE_DELEGATION_LOCK_PATH, 'utf-8');
+      } catch {
+        // ignore
       }
-    });
 
-  opencodeQueue = run.finally(() => {
-    opencodeQueueDepth = Math.max(0, opencodeQueueDepth - 1);
-  });
+      console.warn(`[SYNTROPY] ⚠️  Removing stale Opencode lock (age=${ageMs}ms): ${OPENCODE_DELEGATION_LOCK_PATH}`);
+      await logAudit({
+        type: 'opencode_lock_stale_removed',
+        lockPath: OPENCODE_DELEGATION_LOCK_PATH,
+        ageMs,
+        staleContents: staleContents?.slice(0, 2000)
+      });
+      await fs.remove(OPENCODE_DELEGATION_LOCK_PATH);
+      lock = await attempt();
+      if (lock) return lock;
+    }
+  } catch {
+    // ignore stat/read issues
+  }
 
-  return run;
+  return null;
 };
 
 export const tools = {
@@ -583,11 +545,34 @@ The response summary should be recorded in your Knowledge Base for future refere
       task: z.string().describe('Detailed technical instruction for Opencode. Be specific about what you want done and any constraints.')
     }),
     execute: async ({ task }) => {
-      return enqueueOpencode(task, async () => {
-        console.log(`[SYNTROPY] Delegating to Opencode Agent (CLI): ${task}`);
-        await logAudit({ type: 'opencode_delegation_start', task });
-
+      const lock = await tryAcquireOpencodeLock(task);
+      if (!lock) {
+        let lockContents: string | undefined;
         try {
+          lockContents = await fs.readFile(OPENCODE_DELEGATION_LOCK_PATH, 'utf-8');
+        } catch {
+          // ignore
+        }
+
+        const msg = `Opencode is busy (another delegation is already running). Try again once the current task finishes.`;
+        console.warn(`[SYNTROPY] ${msg}`);
+        await logAudit({
+          type: 'opencode_delegation_rejected_busy',
+          task,
+          lockPath: OPENCODE_DELEGATION_LOCK_PATH,
+          lockContents: lockContents?.slice(0, 2000)
+        });
+        return {
+          error: msg,
+          lockPath: OPENCODE_DELEGATION_LOCK_PATH,
+          lockInfo: lockContents?.slice(0, 2000)
+        };
+      }
+
+      console.log(`[SYNTROPY] Delegating to Opencode Agent (CLI): ${task}`);
+      await logAudit({ type: 'opencode_delegation_start', task });
+
+      try {
 
         const delegationStartMs = Date.now();
 
@@ -670,7 +655,7 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
           }
         };
 
-        return new Promise((resolve, reject) => {
+        const result = await new Promise<any>((resolve, reject) => {
           const args = [
             'run',
             briefing,
@@ -863,12 +848,14 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
           });
         });
 
-        } catch (error: any) {
-          console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
-          await logAudit({ type: 'opencode_delegation_error', error: error.message });
-          return { error: `Delegation failed: ${error.message}` };
-        }
-      });
+        return result;
+      } catch (error: any) {
+        console.error(`[SYNTROPY] Opencode delegation failed: ${error.message}`);
+        await logAudit({ type: 'opencode_delegation_error', error: error.message });
+        return { error: `Delegation failed: ${error.message}` };
+      } finally {
+        await lock.release();
+      }
     }
   }),
 
