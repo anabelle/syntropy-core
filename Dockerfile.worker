@@ -13,7 +13,9 @@ RUN apt-get update && \
     curl -fsSL https://get.docker.com | sh && \
     # Install Opencode AI CLI
     curl -fsSL https://opencode.ai/install | bash && \
-    mv /root/.local/bin/opencode /usr/local/bin/ || true && \
+    # Make opencode available to non-root user (compose runs worker as 1000:1000)
+    if [ -x /root/.opencode/bin/opencode ]; then cp /root/.opencode/bin/opencode /usr/local/bin/opencode; fi && \
+    chmod +x /usr/local/bin/opencode || true && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /pixel
