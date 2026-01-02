@@ -216,11 +216,11 @@ fi
 OUTPUT_ESCAPED=$(echo "$OUTPUT_TAIL" | jq -Rs .)
 
 # Extract full (untruncated) Summary section for Syntropy
-# Opencode typically prints a "## Summary" block at the end.
+# Opencode typically prints a "## SUMMARY" / "## Summary" block at the end.
 SUMMARY_TEXT=""
 if [[ -f "$OUTPUT_FILE" ]]; then
   SUMMARY_TEXT=$(awk '
-    /^## Summary/ {in_summary=1}
+    /^[[:space:]]*##[[:space:]]+([Ss][Uu][Mm][Mm][Aa][Rr][Yy])/ {in_summary=1}
     {if (in_summary) print}
   ' "$OUTPUT_FILE" 2>/dev/null || echo "")
 fi

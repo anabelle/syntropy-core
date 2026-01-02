@@ -229,9 +229,9 @@ Use this to monitor workers spawned with spawnWorker.`,
                     const output = await fs.readFile(outputPath, 'utf-8');
                     task.output = output.slice(-10000); // Last 10KB
                     // Also extract full Summary section for Syntropy (untruncated)
-                    const summaryIndex = output.indexOf('## Summary');
-                    if (summaryIndex >= 0) {
-                        task.summary = output.slice(summaryIndex);
+                    const match = output.match(/^[\t ]*##\s+summary.*$/im);
+                    if (match?.index !== undefined) {
+                        task.summary = output.slice(match.index);
                     }
                 }
                 await writeTaskLedger(ledger);
