@@ -513,7 +513,8 @@ Execute this task. Read relevant files first if needed. Use docker compose comma
 
           const child = spawn('opencode', args, {
             env: { ...process.env, CI: 'true', OPENCODE_TELEMETRY_DISABLED: 'true' },
-            cwd: PIXEL_ROOT
+            cwd: PIXEL_ROOT,
+            stdio: ['ignore', 'pipe', 'pipe']
           });
 
           let fullOutput = '';
