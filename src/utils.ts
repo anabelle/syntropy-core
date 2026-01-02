@@ -42,12 +42,11 @@ export const logAudit = async (entry: any) => {
 export const syncAll = async () => {
   console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
   try {
-    const repos = [
-      PIXEL_ROOT,
-      path.resolve(PIXEL_ROOT, 'lnpixels'),
-      path.resolve(PIXEL_ROOT, 'pixel-agent'),
-      path.resolve(PIXEL_ROOT, 'pixel-landing'),
-      path.resolve(PIXEL_ROOT, 'syntropy-core')
+    const submodules = [
+      'lnpixels',
+      'pixel-agent',
+      'pixel-landing',
+      'syntropy-core'
     ];
 
     // Configure git for container environment
@@ -56,37 +55,73 @@ export const syncAll = async () => {
       console.warn('[SYNTROPY] GH_TOKEN not set - git push will fail');
     }
 
-    for (const repo of repos) {
+    // Step 1: Push each submodule first
+    for (const submodule of submodules) {
+      const repo = path.resolve(PIXEL_ROOT, submodule);
       if (!fs.existsSync(repo)) continue;
       try {
-        // Check if it is a git repo
         if (!fs.existsSync(path.join(repo, '.git'))) continue;
 
-        // Mark directory as safe (required when running as different user)
+        // Mark directory as safe
         await execAsync(`git config --global --add safe.directory ${repo}`, { cwd: repo }).catch(() => { });
 
-        // Configure credential helper for this push if token available
+        // Configure credential helper if token available
         if (ghToken) {
           await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: repo }).catch(() => { });
         }
 
         await execAsync('git add .', { cwd: repo });
         try {
-          // [skip ci] prevents GitHub Actions from triggering a deploy loop
           await execAsync('git commit -m "chore(syntropy): autonomous sync [skip ci]"', { cwd: repo });
+          console.log(`[SYNTROPY] Committed changes in ${submodule}`);
         } catch (e) {
-          // Ignore if no changes to commit
+          // No changes to commit
         }
 
         try {
           const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
           await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
-        } catch (e) {
-          // Push might fail if no upstream or auth issues, catch silently to not break loop
+          console.log(`[SYNTROPY] Pushed ${submodule}`);
+        } catch (e: any) {
+          console.warn(`[SYNTROPY] Push failed for ${submodule}: ${e.message}`);
         }
       } catch (e) {
         // Ignore general git errors
       }
+    }
+
+    // Step 2: Update parent repo with new submodule pointers
+    try {
+      await execAsync(`git config --global --add safe.directory ${PIXEL_ROOT}`, { cwd: PIXEL_ROOT }).catch(() => { });
+      
+      if (ghToken) {
+        await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: PIXEL_ROOT }).catch(() => { });
+      }
+
+      // Stage submodule pointer updates
+      for (const submodule of submodules) {
+        await execAsync(`git add ${submodule}`, { cwd: PIXEL_ROOT }).catch(() => { });
+      }
+      
+      // Also add any other changes in parent repo
+      await execAsync('git add .', { cwd: PIXEL_ROOT });
+      
+      try {
+        await execAsync('git commit -m "chore(syntropy): update submodule refs [skip ci]"', { cwd: PIXEL_ROOT });
+        console.log('[SYNTROPY] Committed submodule updates in parent');
+      } catch (e) {
+        // No changes
+      }
+
+      try {
+        const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: PIXEL_ROOT });
+        await execAsync(`git push origin ${branch.trim()}`, { cwd: PIXEL_ROOT });
+        console.log('[SYNTROPY] Pushed parent repo');
+      } catch (e: any) {
+        console.warn(`[SYNTROPY] Push failed for parent: ${e.message}`);
+      }
+    } catch (e) {
+      // Parent sync error
     }
 
     console.log('[SYNTROPY] Sync complete.');

@@ -11,7 +11,7 @@ export const PIXEL_AGENT_DIR = process.env.PIXEL_AGENT_DIR || path.resolve(PIXEL
 // Model Selection: Primary intelligence for orchestration
 // Use OpenRouter for free/cheaper models, or direct OpenAI
 export const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'openrouter'; // 'openai' or 'openrouter'
-export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'deepseek/deepseek-r1-0528:free';
+export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'xiaomi/mimo-v2-flash:free';
 export const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
 export const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
 // Database and log paths
