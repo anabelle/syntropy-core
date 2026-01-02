@@ -215,10 +215,22 @@ if [[ -f "$OUTPUT_FILE" ]]; then
 fi
 OUTPUT_ESCAPED=$(echo "$OUTPUT_TAIL" | jq -Rs .)
 
+# Extract full (untruncated) Summary section for Syntropy
+# Opencode typically prints a "## Summary" block at the end.
+SUMMARY_TEXT=""
+if [[ -f "$OUTPUT_FILE" ]]; then
+  SUMMARY_TEXT=$(awk '
+    /^## Summary/ {in_summary=1}
+    {if (in_summary) print}
+  ' "$OUTPUT_FILE" 2>/dev/null || echo "")
+fi
+SUMMARY_ESCAPED=$(echo "$SUMMARY_TEXT" | jq -Rs .)
+
 jq "(.tasks[] | select(.id == \"$TASK_ID\")).status = \"$FINAL_STATUS\" | 
     (.tasks[] | select(.id == \"$TASK_ID\")).completedAt = \"$END_TIME\" |
     (.tasks[] | select(.id == \"$TASK_ID\")).exitCode = $EXIT_CODE |
-    (.tasks[] | select(.id == \"$TASK_ID\")).output = $OUTPUT_ESCAPED" \
+  (.tasks[] | select(.id == \"$TASK_ID\")).output = $OUTPUT_ESCAPED |
+  (.tasks[] | select(.id == \"$TASK_ID\")).summary = $SUMMARY_ESCAPED" \
     "$LEDGER" > "$LEDGER.tmp" && mv "$LEDGER.tmp" "$LEDGER"
 
 echo "[WORKER] Worker completed. Exit code: $EXIT_CODE"

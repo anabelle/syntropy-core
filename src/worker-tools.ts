@@ -38,6 +38,7 @@ export interface Task {
   
   exitCode?: number;
   output?: string;
+  summary?: string;
   error?: string;
   
   attempts: number;
@@ -284,7 +285,7 @@ Monitor progress using checkWorkerStatus.`,
 export const checkWorkerStatus = tool({
   description: `Check the status of a worker task.
   
-Returns the current status, output (if completed), and any errors.
+Returns the current status, untruncated summary (if available), output tail (if completed), and any errors.
 Use this to monitor workers spawned with spawnWorker.`,
   
   inputSchema: z.object({
@@ -317,6 +318,12 @@ Use this to monitor workers spawned with spawnWorker.`,
         if (await fs.pathExists(outputPath)) {
           const output = await fs.readFile(outputPath, 'utf-8');
           task.output = output.slice(-10000); // Last 10KB
+
+          // Also extract full Summary section for Syntropy (untruncated)
+          const summaryIndex = output.indexOf('## Summary');
+          if (summaryIndex >= 0) {
+            task.summary = output.slice(summaryIndex);
+          }
         }
         
         await writeTaskLedger(ledger);
@@ -333,6 +340,7 @@ Use this to monitor workers spawned with spawnWorker.`,
       completedAt: task.completedAt,
       attempts: task.attempts,
       exitCode: task.exitCode,
+      summary: task.summary,
       output: task.output?.slice(-3000), // Last 3KB for response
       error: task.error,
       workerId: task.workerId,
