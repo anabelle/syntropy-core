@@ -21,7 +21,7 @@ State tracking is maintained in the root [CONTINUITY.md](../CONTINUITY.md).
 - **Runtime**: Bun v1.3+
 - **Intelligence**: AI SDK (OpenAI gpt-5-mini-mini)
 - **Agent Framework**: ElizaOS v1.6.2 with CLI v1.7.0
-- **Database**: Embedded PGLite (PostgreSQL 17) at `/app/.eliza/.elizadb/`
+- **Database**: PostgreSQL (pgvector enabled) via Docker Compose (`pixel-postgres`)
 - **Deployment**: Docker Compose with Nginx Reverse Proxy
 
 ## Agent Plugins (Active)
@@ -38,7 +38,7 @@ State tracking is maintained in the root [CONTINUITY.md](../CONTINUITY.md).
 
 ## Syntropy → Pixel Integration
 Syntropy reads Pixel's memories via `readPixelMemories` and `getPixelStats` tools:
-- Queries embedded PGLite using `docker exec pixel-agent-1 bun -e "..."`
+- Queries PostgreSQL using `docker exec pixel-postgres-1 psql ...`
 - Accesses `memories` table containing messages, self-reflections, learnings
 - Enables feedback loop: Pixel learns → Syntropy reads insights → mutates character → Pixel evolves
 
@@ -49,7 +49,7 @@ Syntropy requires:
 - Docker socket access (mounted automatically).
 - Write access to the repository root.
 
-**Note**: `DATABASE_URL` is set but ElizaOS uses embedded PGLite. The Docker `postgres` service is unused.
+**Note**: This repo uses `POSTGRES_URL` for the agent database; the `postgres` service is required.
 
 ## License
 MIT
