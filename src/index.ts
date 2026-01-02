@@ -361,6 +361,17 @@ IMPORTANT: Only write evolution reports for SIGNIFICANT events, not routine cycl
       await logAudit({ type: 'auto_sync_skipped', reason: 'AUTONOMOUS_SYNC not enabled' });
     }
 
+    // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
+    try {
+      const { cleanupStaleTasksInternal } = await import('./worker-tools');
+      const result = await cleanupStaleTasksInternal(3);
+      if (result.removed > 0 || result.aborted > 0) {
+        console.log(`[SYNTROPY] Cleaned up ${result.removed} old tasks, ${result.aborted} stale tasks`);
+      }
+    } catch (e: any) {
+      console.warn('[SYNTROPY] Task cleanup failed:', e.message);
+    }
+
     // Reset consecutive failures on success
     consecutiveFailures = 0;
   } catch (error: any) {

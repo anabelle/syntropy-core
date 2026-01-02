@@ -323,7 +323,7 @@ Use this to monitor workers spawned with spawnWorker.`,
         const outputPath = path.join(PIXEL_ROOT, 'data', `worker-output-${taskId}.txt`);
         if (await fs.pathExists(outputPath)) {
           const output = await fs.readFile(outputPath, 'utf-8');
-          task.output = output.slice(-10000); // Last 10KB
+          task.output = output.slice(-2000); // Last 2KB (full output in file)
 
           // Also extract full Summary section for Syntropy (untruncated)
           const match = output.match(/^[\t ]*##\s+summary.*$/im);
@@ -527,6 +527,83 @@ The new Syntropy will read CONTINUITY.md to restore context.
   }
 });
 
+/**
+ * Internal function to cleanup stale tasks (callable directly without tool wrapper)
+ */
+export async function cleanupStaleTasksInternal(retentionDays: number = 7): Promise<{ success: boolean; aborted: number; removed: number; remaining: number }> {
+  console.log(`[SYNTROPY] cleanupStaleTasksInternal (retention=${retentionDays} days)`);
+
+  const ledger = await readTaskLedger();
+  const now = Date.now();
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+
+  let aborted = 0;
+  let removed = 0;
+
+  // Check running tasks for missing containers
+  for (const task of ledger.tasks) {
+    if (task.status === 'running') {
+      const containerName = `pixel-worker-${task.id.slice(0, 8)}`;
+      const status = await getContainerStatus(containerName);
+
+      if (!status.exists) {
+        task.status = 'aborted';
+        task.error = 'Worker container disappeared (possible crash/restart)';
+        task.completedAt = new Date().toISOString();
+        aborted++;
+
+        await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_missing' });
+      } else if (status.exited) {
+        task.status = 'aborted';
+        task.exitCode = status.exitCode;
+        task.error = `Worker container exited unexpectedly (exitCode=${status.exitCode})`;
+        task.completedAt = new Date().toISOString();
+        aborted++;
+
+        await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_exited', exitCode: status.exitCode });
+      }
+    }
+  }
+
+  // Remove old completed/failed tasks and their output files
+  const removedTaskIds: string[] = [];
+  const tasksToKeep = ledger.tasks.filter(task => {
+    if (task.status === 'completed' || task.status === 'failed' || task.status === 'aborted') {
+      const taskAge = now - new Date(task.completedAt || task.createdAt).getTime();
+      if (taskAge > retentionMs) {
+        removed++;
+        removedTaskIds.push(task.id);
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // Delete output files for removed tasks
+  for (const taskId of removedTaskIds) {
+    const outputPath = path.join(PIXEL_ROOT, 'data', `worker-output-${taskId}.txt`);
+    try {
+      if (await fs.pathExists(outputPath)) {
+        await fs.remove(outputPath);
+      }
+    } catch (e) {
+      // Ignore file deletion errors
+    }
+  }
+
+  ledger.tasks = tasksToKeep;
+  await writeTaskLedger(ledger);
+
+  await logAudit({ type: 'worker_cleanup', aborted, removed });
+
+  return {
+    success: true,
+    aborted,
+    removed,
+    remaining: ledger.tasks.length,
+  };
+}
+
 export const cleanupStaleTasks = tool({
   description: `Clean up stale or abandoned worker tasks.
   
@@ -539,63 +616,7 @@ Run this periodically to keep the ledger clean.`,
   }),
 
   execute: async ({ retentionDays }) => {
-    console.log(`[SYNTROPY] Tool: cleanupStaleTasks (retention=${retentionDays} days)`);
-
-    const ledger = await readTaskLedger();
-    const now = Date.now();
-    const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
-
-    let aborted = 0;
-    let removed = 0;
-
-    // Check running tasks for missing containers
-    for (const task of ledger.tasks) {
-      if (task.status === 'running') {
-        const containerName = `pixel-worker-${task.id.slice(0, 8)}`;
-        const status = await getContainerStatus(containerName);
-
-        if (!status.exists) {
-          task.status = 'aborted';
-          task.error = 'Worker container disappeared (possible crash/restart)';
-          task.completedAt = new Date().toISOString();
-          aborted++;
-
-          await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_missing' });
-        } else if (status.exited) {
-          task.status = 'aborted';
-          task.exitCode = status.exitCode;
-          task.error = `Worker container exited unexpectedly (exitCode=${status.exitCode})`;
-          task.completedAt = new Date().toISOString();
-          aborted++;
-
-          await logAudit({ type: 'worker_task_aborted', taskId: task.id, reason: 'container_exited', exitCode: status.exitCode });
-        }
-      }
-    }
-
-    // Remove old completed/failed tasks
-    const tasksToKeep = ledger.tasks.filter(task => {
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'aborted') {
-        const taskAge = now - new Date(task.completedAt || task.createdAt).getTime();
-        if (taskAge > retentionMs) {
-          removed++;
-          return false;
-        }
-      }
-      return true;
-    });
-
-    ledger.tasks = tasksToKeep;
-    await writeTaskLedger(ledger);
-
-    await logAudit({ type: 'worker_cleanup', aborted, removed });
-
-    return {
-      success: true,
-      aborted,
-      removed,
-      remaining: ledger.tasks.length,
-    };
+    return cleanupStaleTasksInternal(retentionDays);
   }
 });
 
