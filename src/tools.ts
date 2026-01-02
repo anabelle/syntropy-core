@@ -1389,5 +1389,128 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
         return { error: error.message };
       }
     }
+  }),
+
+  readDiary: tool({
+    description: 'Read diary entries from Pixel agent. Use this to access reflections, notes, and evolutionary insights.',
+    inputSchema: z.object({
+      limit: z.number().optional().describe('Maximum number of entries to return (default: 10)'),
+      author: z.string().optional().describe('Filter by author (e.g., "Pixel", "Syntropy")'),
+      since: z.string().optional().describe('ISO date string to filter entries created after (e.g., "2025-01-01T00:00:00Z")')
+    }),
+    execute: async ({ limit, author, since }) => {
+      console.log(`[SYNTROPY] Tool: readDiary (limit=${limit || 10}, author=${author || 'any'}, since=${since || 'any'})`);
+      try {
+        const query = 'SELECT * FROM diary_entries';
+        const conditions: string[] = [];
+        const values: any[] = [];
+
+        if (author) {
+          conditions.push(`author = $${values.length + 1}`);
+          values.push(author);
+        }
+
+        if (since) {
+          conditions.push(`created_at >= $${values.length + 1}`);
+          values.push(since);
+        }
+
+        const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+        const limitClause = limit ? ` LIMIT ${limit}` : '';
+        const orderBy = ' ORDER BY created_at DESC';
+
+        const fullQuery = `${query}${whereClause}${orderBy}${limitClause}`;
+
+        const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+db.query(\`${fullQuery.replace(/'/g, "\\'").replace(/\$/g, '\\$')}\`, ${JSON.stringify(values)})
+  .then(r => console.log(JSON.stringify(r.rows)))
+  .catch(e => console.error('ERROR:', e.message));
+        `;
+
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 15000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const entries = JSON.parse(stdout.trim());
+
+        await logAudit({
+          type: 'diary_read',
+          author,
+          count: entries.length,
+          limit
+        });
+
+        return {
+          entries,
+          count: entries.length,
+          filters: { author, since, limit }
+        };
+      } catch (error: any) {
+        await logAudit({ type: 'diary_read_error', error: error.message });
+        return { error: `Failed to read diary: ${error.message}` };
+      }
+    }
+  }),
+
+  writeDiary: tool({
+    description: 'Write a new diary entry. Use this to record insights, learnings, or evolutionary steps.',
+    inputSchema: z.object({
+      author: z.string().describe('Author name (e.g., "Syntropy", "Pixel")'),
+      content: z.string().describe('Diary entry content'),
+      tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight"])')
+    }),
+    execute: async ({ author, content, tags = [] }) => {
+      console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')})`);
+      try {
+        const script = `
+const { PGlite } = require('@electric-sql/pglite');
+const db = new PGlite('/app/.eliza/.elizadb');
+const id = crypto.randomUUID();
+const now = new Date().toISOString();
+db.query(
+  \`INSERT INTO diary_entries (id, author, content, tags, created_at, updated_at) VALUES ('\${id}', '\${author}', '\${content}', '\${JSON.stringify(tags)}'::text[], '\${now}', '\${now}')\`
+)
+  .then(() => console.log(JSON.stringify({ id, success: true })))
+  .catch(e => console.error('ERROR:', e.message));
+        `;
+
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 15000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const result = JSON.parse(stdout.trim());
+
+        await logAudit({
+          type: 'diary_write',
+          author,
+          tags,
+          entryId: result.id,
+          success: true
+        });
+
+        return {
+          success: true,
+          id: result.id,
+          author,
+          content,
+          tags
+        };
+      } catch (error: any) {
+        await logAudit({ type: 'diary_write_error', error: error.message });
+        return { error: `Failed to write diary: ${error.message}` };
+      }
+    }
   })
 };
