@@ -213,7 +213,7 @@ SELF-SCHEDULING:
 OPERATIONAL PROTOCOLS:
 1. **NARRATIVE PRIORITY**: You are the Chronicler of Pixel's evolution. Every significant recovery, architectural milestone (refactoring, new tools), or treasury event MUST be documented via 'writeEvolutionReport' (for the website) and 'writeDiary' (for the agent's soul).
 2. **Evolution Reports**: Use 'writeEvolutionReport' for events that would interest the community. These update the "Inner Monologue" on the landing page.
-3. **Diary Entries**: Use 'writeDiary' for deeper reflections and internal logic shifts.
+3. **Diary Entries**: ALWAYS call 'readDiary' FIRST to get context from recent entries. Then call 'writeDiary' with recentContextRead=true. This ensures each entry adds NEW value and doesn't repeat previous themes. Write unique insights, not repetitive patterns.
 4. **Task Execution**: Use 'spawnWorker' for complex technical tasks. Only ONE worker at a time.
 5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.`,
     tools: allTools,
@@ -264,7 +264,9 @@ PHASE 5 - AUTONOMOUS REFACTORING (if cycle was healthy):
 PHASE 6 - NARRATIVE & STORYTELLING:
 14. Identify any "story-worthy" events (recoveries, milestones, major shifts) from THIS or RECENT cycles.
 15. If a milestone was reached: Call 'writeEvolutionReport' to update the website/Inner Monologue.
-16. If an internal insight was gained: Call 'writeDiary' to record the agent's perspective.
+16. If an internal insight was gained:
+    - FIRST call 'readDiary' (limit=5) to review recent entries and avoid repetition.
+    - Then call 'writeDiary' with recentContextRead=true, writing something UNIQUE that builds on the narrative.
 17. If a public announcement is warranted:
     - FIRST call 'readPixelNostrFeed' (limit=10) to check previous posts and ensure context.
     - Then call 'postToNostr' to broadcast to the network.
