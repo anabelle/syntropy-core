@@ -280,12 +280,15 @@ PHASE 6 - NARRATIVE & STORYTELLING:
     - FIRST call 'readPixelNostrFeed' (limit=10) to check previous posts and ensure context.
     - Then call 'postToNostr' to broadcast to the network.
 
-PHASE 7 - IDEA GARDEN (Creativity & Brainstorming):
-18. Call 'tendIdeaGarden' with action='read' to view current seeds.
-19. If any seeds exist with [Human] contributions, acknowledge and water those first.
-20. Call 'tendIdeaGarden' with action='water' on ONE existing seed (add your thought).
-21. If this cycle revealed something novel or puzzling, call action='plant' with a new seed.
-22. If any seed has 5+ waterings AND clear implementation path, call action='harvest'.
+PHASE 7 - IDEA GARDEN (after wrap-up, before scheduleNextRun):
+19. Call 'tendIdeaGarden' with action='read' to view current seeds.
+20. Check for [Human] entries - acknowledge and respond to human input.
+21. Call 'tendIdeaGarden' with action='water' on ONE existing seed.
+    - If the seed is becoming too complex/multi-faceted, perform MITOSIS:
+    - Call 'plant' for new sub-seeds.
+    - Call 'compost' on the original with note "Split into..."
+22. If you had a novel observation this cycle (something surprising or unclear), call 'plant'.
+23. If any seed has 5+ waterings AND clear implementation path, call 'harvest'.
 23. (Optional) If a seed needs external research, use action='research' to spawn a research worker.
 
 PHASE 8 - WRAP UP:
