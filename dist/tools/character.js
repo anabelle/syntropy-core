@@ -28,7 +28,7 @@ export const characterTools = {
         }
     }),
     mutateCharacter: tool({
-        description: 'Mutate a specific part of Pixel\'s character DNA. Automatically builds and reboots the agent.',
+        description: 'Mutate a specific part of Pixel\'s character DNA. Automatically builds and reboots the agent. Includes pre-flight checks, syntax validation, and post-restart verification.',
         inputSchema: z.object({
             file: z.enum(['bio.ts', 'topics.ts', 'style.ts', 'postExamples.ts', 'messageExamples.ts']),
             content: z.string().describe('The full content of the file to write')
@@ -36,36 +36,144 @@ export const characterTools = {
         execute: async ({ file, content }) => {
             console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
             const filePath = path.resolve(CHARACTER_DIR, file);
+            const tempFilePath = filePath + '.tmp';
+            const backupFilePath = filePath + '.bak';
             const varName = file.split('.')[0];
             let oldContent = "";
+            // Helper: wait for agent health
+            const waitForAgentHealth = async (maxAttempts = 10, delayMs = 3000) => {
+                for (let i = 0; i < maxAttempts; i++) {
+                    try {
+                        const { stdout } = await execAsync('docker inspect --format="{{.State.Health.Status}}" pixel-agent-1', { timeout: 5000 });
+                        const status = stdout.trim();
+                        if (status === 'healthy') {
+                            console.log(`[SYNTROPY] Agent healthy after ${i + 1} checks`);
+                            return true;
+                        }
+                        // Also accept 'starting' if container is running
+                        if (status === 'starting') {
+                            console.log(`[SYNTROPY] Agent starting, waiting... (attempt ${i + 1}/${maxAttempts})`);
+                        }
+                    }
+                    catch {
+                        // Container might not have healthcheck, check if running
+                        try {
+                            const { stdout } = await execAsync('docker inspect --format="{{.State.Running}}" pixel-agent-1', { timeout: 5000 });
+                            if (stdout.trim() === 'true') {
+                                // Give it a moment to stabilize
+                                await new Promise(r => setTimeout(r, delayMs));
+                                console.log(`[SYNTROPY] Agent running (no healthcheck), assuming ready`);
+                                return true;
+                            }
+                        }
+                        catch { /* ignore */ }
+                    }
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+                return false;
+            };
             try {
-                // 1. Validation de base
+                // === PRE-FLIGHT CHECKS ===
+                console.log('[SYNTROPY] Running pre-flight checks...');
+                // 1a. Check Docker is accessible
+                try {
+                    await execAsync('docker info', { timeout: 10000 });
+                }
+                catch (dockerErr) {
+                    await logAudit({ type: 'mutation_preflight_fail', file, error: 'Docker not accessible' });
+                    return { error: 'Pre-flight failed: Docker is not accessible. Cannot proceed with mutation.' };
+                }
+                // 1b. Check agent container exists
+                try {
+                    const { stdout } = await execAsync('docker ps -a --filter name=pixel-agent-1 --format "{{.Names}}"', { timeout: 5000 });
+                    if (!stdout.includes('pixel-agent-1')) {
+                        await logAudit({ type: 'mutation_preflight_fail', file, error: 'Agent container not found' });
+                        return { error: 'Pre-flight failed: pixel-agent-1 container not found.' };
+                    }
+                }
+                catch {
+                    await logAudit({ type: 'mutation_preflight_fail', file, error: 'Failed to check container' });
+                    return { error: 'Pre-flight failed: Could not verify agent container status.' };
+                }
+                // 1c. Check character directory exists
+                if (!await fs.pathExists(CHARACTER_DIR)) {
+                    await logAudit({ type: 'mutation_preflight_fail', file, error: 'Character dir missing' });
+                    return { error: `Pre-flight failed: Character directory not found at ${CHARACTER_DIR}` };
+                }
+                // === VALIDATION ===
+                // 2a. Basic export validation
                 const exportRegex = new RegExp(`export\\s+(const|let|var)\\s+${varName}\\b`, 'm');
                 if (!exportRegex.test(content)) {
                     return { error: `Validation failed: Content must export '${varName}'` };
                 }
-                // 2. Backup old content
-                if (fs.existsSync(filePath)) {
+                // 2b. TypeScript syntax validation (write to temp, check with bun)
+                console.log('[SYNTROPY] Validating TypeScript syntax...');
+                await fs.writeFile(tempFilePath, content);
+                try {
+                    await execAsync(`bun build --no-bundle "${tempFilePath}" --outdir /tmp/mutation-check`, { timeout: 30000 });
+                }
+                catch (syntaxErr) {
+                    await fs.remove(tempFilePath);
+                    await logAudit({ type: 'mutation_syntax_fail', file, error: syntaxErr.message });
+                    return { error: `TypeScript syntax validation failed: ${syntaxErr.message.slice(0, 200)}` };
+                }
+                // === BACKUP ===
+                // 3. Backup current file (not just in memory, also on disk)
+                if (await fs.pathExists(filePath)) {
                     oldContent = await fs.readFile(filePath, 'utf-8');
+                    await fs.copy(filePath, backupFilePath);
+                    console.log(`[SYNTROPY] Backed up ${file} to ${file}.bak`);
                 }
                 await logAudit({ type: 'mutation_start', file });
-                // 3. Write new content
-                await fs.writeFile(filePath, content);
+                // === ATOMIC WRITE ===
+                // 4. Rename temp file to target (atomic on most filesystems)
+                await fs.rename(tempFilePath, filePath);
+                console.log(`[SYNTROPY] Wrote ${file} atomically`);
                 try {
-                    // 4. Validate build ecosystem-wide
+                    // === BUILD VALIDATION ===
+                    // 5. Validate build ecosystem-wide
                     console.log('[SYNTROPY] Validating mutation build...');
                     await execAsync('./scripts/validate-build.sh', { cwd: PIXEL_ROOT, timeout: 300000 });
-                    // 5. Build agent specifically and restart
+                    // 6. Build agent specifically
+                    console.log('[SYNTROPY] Building agent...');
                     await execAsync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-                    await execAsync('docker restart pixel-agent-1', { timeout: 20000 });
+                    // === RESTART WITH HEALTH CHECK ===
+                    // 7. Restart agent
+                    console.log('[SYNTROPY] Restarting agent...');
+                    await execAsync('docker restart pixel-agent-1', { timeout: 30000 });
+                    // 8. Wait for agent to become healthy
+                    console.log('[SYNTROPY] Waiting for agent health...');
+                    const isHealthy = await waitForAgentHealth(15, 2000); // 15 attempts, 2s each = 30s max
+                    if (!isHealthy) {
+                        throw new Error('Agent failed to become healthy after restart');
+                    }
+                    // === SUCCESS ===
+                    // 9. Clean up backup and sync
+                    await fs.remove(backupFilePath);
                     await syncAll({ reason: `feat(pixel-agent): mutate ${file}` });
                     await logAudit({ type: 'mutation_success', file });
-                    return { success: true, mutatedFile: file };
+                    return { success: true, mutatedFile: file, verified: true };
                 }
                 catch (buildError) {
-                    // 6. Rollback
-                    console.error(`[SYNTROPY] Mutation build failed: ${buildError.message}. Rolling back...`);
-                    if (oldContent) {
+                    // === ROLLBACK ===
+                    console.error(`[SYNTROPY] Mutation failed: ${buildError.message}. Rolling back...`);
+                    // Restore from backup file (more reliable than memory)
+                    if (await fs.pathExists(backupFilePath)) {
+                        await fs.copy(backupFilePath, filePath);
+                        await fs.remove(backupFilePath);
+                        console.log(`[SYNTROPY] Restored ${file} from backup`);
+                        // Try to restart with old content
+                        try {
+                            await execAsync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
+                            await execAsync('docker restart pixel-agent-1', { timeout: 30000 });
+                            await waitForAgentHealth(10, 2000);
+                        }
+                        catch (restoreErr) {
+                            console.error(`[SYNTROPY] Warning: Rollback build/restart failed: ${restoreErr.message}`);
+                        }
+                    }
+                    else if (oldContent) {
+                        // Fallback to memory backup
                         await fs.writeFile(filePath, oldContent);
                     }
                     await logAudit({ type: 'mutation_rollback', file, error: buildError.message });
@@ -73,6 +181,10 @@ export const characterTools = {
                 }
             }
             catch (error) {
+                // Clean up temp/backup files on unexpected error
+                await fs.remove(tempFilePath).catch(() => { });
+                await fs.remove(backupFilePath).catch(() => { });
+                await logAudit({ type: 'mutation_error', file, error: error.message });
                 return { error: `Mutation process failed: ${error.message}` };
             }
         }

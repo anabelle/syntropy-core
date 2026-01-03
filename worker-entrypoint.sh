@@ -68,6 +68,16 @@ check_forbidden_commands() {
     return 0
   fi
   
+  # Check for docker compose without --project-directory (causes volume path corruption)
+  if echo "$cmd" | grep -qiE "docker compose (up|down|restart|build|logs|exec|run)" && \
+     ! echo "$cmd" | grep -qiE "\-\-project-directory"; then
+    echo "[WORKER] 🚫 GUARDRAIL: docker compose command missing --project-directory!"
+    echo "[WORKER] Command: $cmd"
+    echo "[WORKER] FIX: Use docker compose --project-directory \$HOST_PIXEL_ROOT <command>"
+    echo "[WORKER] Without this, volume paths resolve incorrectly and corrupt the system."
+    return 1
+  fi
+  
   # Forbidden patterns for regular tasks
   local FORBIDDEN_PATTERNS=(
     "docker compose.*syntropy.*build"
@@ -107,6 +117,12 @@ jq "(.tasks[] | select(.id == \"$TASK_ID\")).status = \"running\" |
 # ============================================
 # PREPARE BRIEFING
 # ============================================
+
+# HOST_PIXEL_ROOT is the absolute path on the HOST machine where /pixel is mounted.
+# When running docker compose from inside a container, relative paths (like ./data)
+# resolve to the container's PWD, not the host path. This causes volume mount corruption.
+HOST_PROJECTDIR="${HOST_PIXEL_ROOT:-/home/ana/Code/pixel}"
+
 BRIEFING="
 === WORKER TASK BRIEFING ===
 
@@ -116,12 +132,25 @@ CONTEXT:
 - You CAN rebuild services: api, web, landing, agent, postgres, nginx
 - CRITICAL: You MUST NOT rebuild the 'syntropy' service (it would kill your parent)
 
+⚠️ CRITICAL DOCKER COMPOSE PATH RULE ⚠️
+When running ANY docker compose command, you MUST use --project-directory:
+  docker compose --project-directory ${HOST_PROJECTDIR} <command>
+
+Examples:
+  docker compose --project-directory ${HOST_PROJECTDIR} up -d --build agent
+  docker compose --project-directory ${HOST_PROJECTDIR} logs agent --tail 50
+  docker compose --project-directory ${HOST_PROJECTDIR} restart api
+
+WHY: You are inside a container where /pixel is mounted, but docker compose
+volume paths (./data, ./logs) resolve relative to where docker compose runs.
+Without --project-directory, volumes mount to wrong paths and break the system.
+
 GUARDRAIL RULES:
-✅ ALLOWED: docker compose up -d --build agent
-✅ ALLOWED: docker compose up -d --build api web landing
-✅ ALLOWED: docker compose restart syntropy
-❌ FORBIDDEN: docker compose up -d --build (rebuilds ALL including syntropy)
+✅ ALLOWED: docker compose --project-directory ${HOST_PROJECTDIR} up -d --build agent
+✅ ALLOWED: docker compose --project-directory ${HOST_PROJECTDIR} restart api
+❌ FORBIDDEN: docker compose up -d --build (missing --project-directory!)
 ❌ FORBIDDEN: docker compose up -d --build syntropy
+❌ FORBIDDEN: Any docker compose command without --project-directory
 
 YOUR TASK:
 $TASK_DESC
