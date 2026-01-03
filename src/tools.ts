@@ -473,21 +473,30 @@ IMPORTANT:
   readPixelNostrFeed: tool({
     description: 'Read the most recent posts from the Pixel agent on Nostr. Use this to see what Pixel has been saying recently.',
     inputSchema: z.object({
-      limit: z.number().optional().default(5).describe('Number of recent posts to fetch')
+      limit: z.number().optional().default(10).describe('Number of recent posts to fetch (default 10)')
     }),
     execute: async ({ limit }) => {
       console.log(`[SYNTROPY] Tool: readPixelNostrFeed (limit=${limit})`);
       try {
+        // Use pool.querySync directly instead of poolList - poolList has issues returning stale data
         const script = `
-const { poolList } = require('/app/plugin-nostr/lib/poolList.js');
 const { SimplePool, nip19, getPublicKey } = require('nostr-tools');
 const WebSocket = require('ws');
 global.WebSocket = WebSocket;
 
 async function run() {
   const sk = process.env.NOSTR_PRIVATE_KEY;
-  const relays = (process.env.NOSTR_RELAYS || '').split(',');
-  if (!sk || !relays.length) {
+  // Use a broad set of relays including Primal for best coverage
+  const relays = [
+    'wss://relay.damus.io',
+    'wss://nos.lol', 
+    'wss://relay.snort.social',
+    'wss://relay.primal.net',
+    'wss://purplepag.es',
+    'wss://relay.nostr.band'
+  ];
+  
+  if (!sk) {
     console.log('[]');
     process.exit(0);
   }
@@ -506,7 +515,8 @@ async function run() {
 
   const pool = new SimplePool();
   try {
-    const posts = await poolList(pool, relays, [{ authors: [pk], kinds: [1], limit: ${limit} }]);
+    // Use querySync directly - it properly returns the most recent events
+    const posts = await pool.querySync(relays, { authors: [pk], kinds: [1], limit: ${limit} });
     console.log(JSON.stringify(posts.sort((a, b) => b.created_at - a.created_at)));
   } finally {
     try { pool.close(relays); } catch (e) {}
