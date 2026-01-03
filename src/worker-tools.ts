@@ -75,6 +75,40 @@ async function getRunningWorkerContainers(): Promise<string[]> {
   });
 }
 
+async function cleanupExitedWorkerContainers(): Promise<{ removed: number; attempted: number }> {
+  return new Promise((resolve) => {
+    const listProc = spawn('docker', [
+      'ps', '-a',
+      '--filter', 'name=pixel-worker-',
+      '--filter', 'status=exited',
+      '--format', '{{.Names}}'
+    ]);
+
+    let output = '';
+    listProc.stdout.on('data', (d) => { output += d.toString(); });
+
+    listProc.on('close', () => {
+      const names = output
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      if (names.length === 0) {
+        resolve({ removed: 0, attempted: 0 });
+        return;
+      }
+
+      const rmProc = spawn('docker', ['rm', '-f', ...names]);
+      rmProc.on('close', (code) => {
+        resolve({ removed: code === 0 ? names.length : 0, attempted: names.length });
+      });
+      rmProc.on('error', () => resolve({ removed: 0, attempted: names.length }));
+    });
+
+    listProc.on('error', () => resolve({ removed: 0, attempted: 0 }));
+  });
+}
+
 async function acquireWorkerLock(taskId: string): Promise<{ acquired: true } | { acquired: false; reason: string }> {
   await fs.ensureDir(path.dirname(WORKER_LOCK_PATH));
 
@@ -172,6 +206,13 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   console.log(`[SYNTROPY] spawnWorkerInternal (priority=${priority})`);
   console.log(`[SYNTROPY] Task: ${task.substring(0, 200)}...`);
 
+  // Keep the system tidy: remove exited worker containers from prior runs.
+  // (Workers persist logs to /pixel/data + /pixel/logs, so keeping containers is unnecessary.)
+  const cleanup = await cleanupExitedWorkerContainers();
+  if (cleanup.attempted > 0) {
+    console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
+  }
+
   // 1. Enforce single-worker-at-a-time
   const ledger = await readTaskLedger();
   const lockTaskId = crypto.randomUUID();
@@ -219,7 +260,7 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
     'compose', '--profile', 'worker',
     'run', '-d',
     '--name', containerName,
-    // NOTE: no --rm; keeping container allows `docker compose logs -f worker`
+    // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
     '-e', `TASK_ID=${taskId}`,
     '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
     'worker'
@@ -482,13 +523,18 @@ The new Syntropy will read CONTINUITY.md to restore context.
 
     console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
 
+    const cleanup = await cleanupExitedWorkerContainers();
+    if (cleanup.attempted > 0) {
+      console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
+    }
+
     const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
 
     const proc = spawn('docker', [
       'compose', '--profile', 'worker',
       'run', '-d',
       '--name', containerName,
-      // NOTE: no --rm; keep container for log inspection
+      // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
       '-e', `TASK_ID=${taskId}`,
       '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
       'worker'
