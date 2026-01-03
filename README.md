@@ -33,7 +33,12 @@ Syntropy uses the **Brain/Hands separation pattern** for safe autonomous code mo
 | `listWorkerTasks` | View task ledger |
 | `readWorkerLogs` | Read worker output logs |
 | `scheduleSelfRebuild` | Safe protocol for Syntropy self-updates |
+| `listWorkerTasks` | View task ledger |
+| `readWorkerLogs` | Read worker output logs |
+| `scheduleSelfRebuild` | Safe protocol for Syntropy self-updates |
 | `cleanupStaleTasks` | Prune old completed tasks |
+| `gitUpdate` | Fetch and pull changes from GitHub (Human/PRs) |
+| `gitSync` | Commit and push changes to GitHub |
 
 ### Worker Logs
 - Live shared log: `logs/opencode_live.log`

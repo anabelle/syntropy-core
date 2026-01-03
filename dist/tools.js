@@ -134,6 +134,48 @@ The reason you provide becomes the commit message - make it descriptive!`,
             }
         }
     }),
+    gitUpdate: tool({
+        description: 'Update the local codebase from GitHub. Use this if you believe the remote repository has changes you need (e.g., after a PR merge or when instructed).',
+        inputSchema: z.object({
+            confirm: z.boolean().describe('Set to true to confirm the update operation')
+        }),
+        execute: async () => {
+            console.log('[SYNTROPY] Tool: gitUpdate');
+            try {
+                const { stdout: status } = await execAsync('git status --porcelain', { cwd: PIXEL_ROOT });
+                if (status.trim()) {
+                    // We have local changes. Stash them first?
+                    // For safety, we will abort and ask the agent to commit first via gitSync.
+                    return {
+                        success: false,
+                        message: "Cannot update: You have uncommitted local changes. Please use 'gitSync' to save your work first, or stash them manually."
+                    };
+                }
+                console.log('[SYNTROPY] Fetching updates...');
+                await execAsync('git fetch origin', { cwd: PIXEL_ROOT });
+                const { stdout: behind } = await execAsync('git rev-list HEAD..origin/master --count', { cwd: PIXEL_ROOT });
+                const count = parseInt(behind.trim(), 10);
+                if (count === 0) {
+                    return { success: true, message: "Already up to date." };
+                }
+                console.log(`[SYNTROPY] Pulling ${count} commits...`);
+                // We are clean, so rebase should be safe, but --autostash just in case
+                const { stdout: pullLog } = await execAsync('git pull --rebase --autostash origin master', { cwd: PIXEL_ROOT });
+                // Also update submodules
+                await execAsync('git submodule update --init --recursive', { cwd: PIXEL_ROOT });
+                await logAudit({ type: 'git_update', commits: count });
+                return {
+                    success: true,
+                    message: `Successfully updated ${count} commits from origin/master.`,
+                    details: pullLog
+                };
+            }
+            catch (error) {
+                await logAudit({ type: 'git_update_error', error: error.message });
+                return { error: `Update failed: ${error.message}` };
+            }
+        }
+    }),
     readAgentLogs: tool({
         description: 'Read recent logs from the Pixel agent. Automatically filters noise for Syntropy intelligence.',
         inputSchema: z.object({
