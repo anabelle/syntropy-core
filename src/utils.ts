@@ -111,11 +111,15 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
           }
         }
 
+        // Detect current branch
+        const { stdout: currentBranchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
+        const currentBranch = currentBranchRaw.trim();
+
         // 2. PULL & REBASE (Bidirectional Sync)
         // We try to pull changes from remote before pushing to avoid non-fast-forward errors
         try {
-          console.log(`[SYNTROPY] ⬇️  Pulling latest for ${repoName}...`);
-          await execAsync('git pull --rebase --autostash origin master', { cwd: repoPath });
+          console.log(`[SYNTROPY] ⬇️  Pulling latest for ${repoName} (${currentBranch})...`);
+          await execAsync(`git pull --rebase --autostash origin ${currentBranch}`, { cwd: repoPath });
         } catch (pullError: any) {
           console.warn(`[SYNTROPY] ⚠️ Conflict detected during pull in ${repoName}.`);
           // Strategy: Create a conflict branch and push that instead of breaking local state
@@ -123,12 +127,12 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
           await execAsync(`git checkout -b ${conflictBranch}`, { cwd: repoPath });
           await execAsync('git commit -am "chore: conflict resolution save point"', { cwd: repoPath }).catch(() => { });
           await execAsync(`git push -u origin ${conflictBranch}`, { cwd: repoPath });
-          console.warn(`[SYNTROPY] 🚨 Created conflict branch: ${conflictBranch}. Resetting master to origin.`);
+          console.warn(`[SYNTROPY] 🚨 Created conflict branch: ${conflictBranch}. Resetting ${currentBranch} to origin.`);
 
-          // Hard reset master to origin to get back in sync (preserving work in the conflict branch)
-          await execAsync('git checkout master', { cwd: repoPath });
+          // Hard reset primary branch to origin to get back in sync
+          await execAsync(`git checkout ${currentBranch}`, { cwd: repoPath });
           await execAsync('git fetch origin', { cwd: repoPath });
-          await execAsync('git reset --hard origin/master', { cwd: repoPath });
+          await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
           return false; // Stop processing this repo for now
         }
 
