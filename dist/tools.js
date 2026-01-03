@@ -531,6 +531,72 @@ run();
             }
         }
     }),
+    readPixelNostrMentions: tool({
+        description: "Read recent mentions of the Pixel agent on Nostr. Use this to see what people are saying to or about Pixel.",
+        inputSchema: z.object({
+            limit: z.number().optional().default(10).describe('Number of recent mentions to fetch (default 10)')
+        }),
+        execute: async ({ limit }) => {
+            console.log(`[SYNTROPY] Tool: readPixelNostrMentions (limit=${limit})`);
+            try {
+                const script = `
+const { SimplePool, nip19, getPublicKey } = require('nostr-tools');
+const WebSocket = require('ws');
+global.WebSocket = WebSocket;
+
+async function run() {
+  const sk = process.env.NOSTR_PRIVATE_KEY;
+  const relays = [
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.snort.social',
+    'wss://relay.primal.net',
+    'wss://purplepag.es',
+    'wss://relay.nostr.band'
+  ];
+  
+  if (!sk) {
+    console.log('[]');
+    process.exit(0);
+  }
+  
+  let pk = '';
+  try {
+    if (sk.startsWith('nsec')) {
+      pk = getPublicKey(nip19.decode(sk).data);
+    } else {
+      pk = getPublicKey(Buffer.from(sk, 'hex'));
+    }
+  } catch (e) {
+    console.error('ERROR: Invalid key');
+    process.exit(1);
+  }
+
+  const pool = new SimplePool();
+  try {
+    const mentions = await pool.querySync(relays, { '#p': [pk], kinds: [1], limit: ${limit} });
+    const filtered = mentions.filter(m => m.pubkey !== pk);
+    console.log(JSON.stringify(filtered.sort((a, b) => b.created_at - a.created_at)));
+  } finally {
+    try { pool.close(relays); } catch (e) {}
+    process.exit(0);
+  }
+}
+run();
+`;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 30000 });
+                if (stderr && stderr.includes('ERROR:')) {
+                    return { error: stderr };
+                }
+                const mentions = JSON.parse(stdout.trim());
+                await logAudit({ type: 'pixel_nostr_mentions_read', count: mentions.length });
+                return { mentions };
+            }
+            catch (error) {
+                return { error: `Failed to read Pixel mentions: ${error.message}` };
+            }
+        }
+    }),
     readPixelMemories: tool({
         description: `Read Pixel's memories from the PostgreSQL database.
 The agent stores all narrative data in PostgreSQL with different content types:
