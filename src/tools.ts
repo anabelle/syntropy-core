@@ -1207,6 +1207,13 @@ After completing the task:
 2. Update REFACTOR_QUEUE.md to mark the task as ✅ DONE or ❌ FAILED
 3. Update the "Last Processed" timestamp
 
+4. Commit ALL changes (Code + Queue):
+   git config --global user.email "bot@syntropy.io"
+   git config --global user.name "Syntropy Bot"
+   git config --global --add safe.directory /pixel
+   git add .
+   git commit -m "refactor(${taskId}): ${headerMatch[1]}"
+
 VERIFICATION COMMAND:
 ${verifyCommand || 'No verification specified - manually confirm changes work'}
 
