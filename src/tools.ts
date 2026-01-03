@@ -1452,6 +1452,7 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
       console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')})`);
       try {
         const id = crypto.randomUUID();
+        const now = new Date();
         const escapedContent = content.replace(/'/g, "''");
         const tagsArray = tags.length > 0
           ? `ARRAY[${tags.map(t => `'${t.replace(/'/g, "''")}'`).join(',')}]`
@@ -1468,11 +1469,47 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
           return { error: stderr };
         }
 
+        // Sync to markdown for knowledge vectorization
+        const diaryMdDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
+        await fs.ensureDir(diaryMdDir);
+
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const year = now.getFullYear();
+        const month = months[now.getMonth()];
+        const day = now.getDate().toString().padStart(2, '0');
+        const filename = `${year}-${month}-${day}.md`;
+        const filePath = path.join(diaryMdDir, filename);
+
+        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const tagsStr = tags.length > 0 ? `\n**Tags:** ${tags.join(', ')}` : '';
+
+        const entryMarkdown = `
+---
+
+### ${timeStr} - ${author}${tagsStr}
+
+${content}
+
+*Entry ID: ${id}*
+`;
+
+        if (fs.existsSync(filePath)) {
+          await fs.appendFile(filePath, entryMarkdown);
+        } else {
+          const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+          const dateStr = now.toLocaleDateString('en-US', options);
+          const header = `# Pixel's Diary: ${dateStr}\n\n*Auto-synced diary entries from the database. These entries are vectorized for knowledge context.*\n\n`;
+          await fs.writeFile(filePath, header + entryMarkdown);
+        }
+
+        console.log(`[SYNTROPY] Diary entry synced to ${filename}`);
+
         await logAudit({
           type: 'diary_write',
           author,
           tags,
           entryId: id,
+          mdFile: filename,
           success: true
         });
 
@@ -1481,7 +1518,8 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
           id,
           author,
           tags,
-          message: 'Diary entry persisted to PostgreSQL successfully'
+          mdFile: filename,
+          message: 'Diary entry persisted to PostgreSQL and synced to markdown for knowledge vectorization'
         };
       } catch (error: any) {
         await logAudit({ type: 'diary_write_error', error: error.message });
