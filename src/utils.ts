@@ -79,13 +79,13 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
         if (branch.startsWith('conflict/')) {
           console.warn(`[SYNTROPY] 🚨 DETECTED STUCK CONFLICT BRANCH: ${branch} in ${repoName}`);
 
-          // Try to determine target branch (main or master)
-          // We check which one exists locally
-          const { stdout: branches } = await execAsync('git branch', { cwd: repoPath });
+          // Try to determine target branch (main or master) by parsing actual list
+          const { stdout: branchesRaw } = await execAsync('git branch --format="%(refname:short)"', { cwd: repoPath });
+          const branches = branchesRaw.split('\n').map(b => b.trim());
           const target = branches.includes('main') ? 'main' : 'master';
 
           console.log(`[SYNTROPY] 🚑 Self-healing: Force switching back to ${target}...`);
-          await execAsync(`git checkout ${target}`, { cwd: repoPath });
+          await execAsync(`git checkout -f ${target}`, { cwd: repoPath });
           console.log(`[SYNTROPY] ✅ Restored ${repoName} to ${target}`);
         }
       } catch (e: any) {
@@ -155,7 +155,7 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
           console.warn(`[SYNTROPY] 🚨 Created conflict branch: ${conflictBranch}. Resetting ${currentBranch} to origin.`);
 
           // Hard reset primary branch to origin to get back in sync
-          await execAsync(`git checkout ${currentBranch}`, { cwd: repoPath });
+          await execAsync(`git checkout -f ${currentBranch}`, { cwd: repoPath });
           await execAsync('git fetch origin', { cwd: repoPath });
           await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
           return false; // Stop processing this repo for now

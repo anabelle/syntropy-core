@@ -61,11 +61,32 @@ export const syncAll = async (context) => {
                 // Ignore config errors
             }
         };
+        const ensureCleanBranchState = async (repoPath, repoName) => {
+            try {
+                const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
+                const branch = branchRaw.trim();
+                if (branch.startsWith('conflict/')) {
+                    console.warn(`[SYNTROPY] 🚨 DETECTED STUCK CONFLICT BRANCH: ${branch} in ${repoName}`);
+                    // Try to determine target branch (main or master) by parsing actual list
+                    const { stdout: branchesRaw } = await execAsync('git branch --format="%(refname:short)"', { cwd: repoPath });
+                    const branches = branchesRaw.split('\n').map(b => b.trim());
+                    const target = branches.includes('main') ? 'main' : 'master';
+                    console.log(`[SYNTROPY] 🚑 Self-healing: Force switching back to ${target}...`);
+                    await execAsync(`git checkout -f ${target}`, { cwd: repoPath });
+                    console.log(`[SYNTROPY] ✅ Restored ${repoName} to ${target}`);
+                }
+            }
+            catch (e) {
+                console.warn(`[SYNTROPY] Self-healing check failed for ${repoName}: ${e.message}`);
+            }
+        };
         const handleRepoSync = async (repoPath, isSubmodule) => {
             if (!fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git')))
                 return false;
             const repoName = path.basename(repoPath);
             console.log(`[SYNTROPY] 🔄 Syncing ${repoName}...`);
+            // 0. SELF-HEAL: Check if we are stuck on a conflict branch from a previous crash
+            await ensureCleanBranchState(repoPath, repoName);
             await configureGit(repoPath);
             try {
                 // 1. STAGE & COMMIT LOCAL CHANGES
@@ -117,7 +138,7 @@ export const syncAll = async (context) => {
                     await execAsync(`git push -u origin ${conflictBranch}`, { cwd: repoPath });
                     console.warn(`[SYNTROPY] 🚨 Created conflict branch: ${conflictBranch}. Resetting ${currentBranch} to origin.`);
                     // Hard reset primary branch to origin to get back in sync
-                    await execAsync(`git checkout ${currentBranch}`, { cwd: repoPath });
+                    await execAsync(`git checkout -f ${currentBranch}`, { cwd: repoPath });
                     await execAsync('git fetch origin', { cwd: repoPath });
                     await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
                     return false; // Stop processing this repo for now
