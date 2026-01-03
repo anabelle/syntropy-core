@@ -69,13 +69,13 @@ The garden enables ideas to mature over multiple cycles before becoming tasks.`,
 
           for (const section of sections) {
             // Updated regex: Match until the next major section header or end of file
-            const sectionPattern = new RegExp(`## [🌱🌿🌸🍂] ${section}[\\s\\S]*?(?=## [🌱🌿🌸🍂]|$)`, 'g');
+            const sectionPattern = new RegExp(`## [🌱🌿🌸🍂] ${section}[\\s\\S]*?(?=## [🌱🌿🌸🍂]|$)`, 'gu');
             const sectionMatch = garden.match(sectionPattern);
 
             if (sectionMatch) {
               const sectionContent = sectionMatch[0];
               // Robust pattern for matching seeds within the section
-              const seedPattern = /### ([^\n]+)\n[\s\S]*?- \*\*Waterings\*\*: (\d+|HARVESTED)/g;
+              const seedPattern = /### ([^\r\n]+)[\r\n]+[\s\S]*?- \*\*Waterings\*\*: (\d+|HARVESTED)/gu;
               let match;
               while ((match = seedPattern.exec(sectionContent)) !== null) {
                 seeds.push({
