@@ -470,6 +470,69 @@ IMPORTANT:
     }
   }),
 
+  readPixelNostrFeed: tool({
+    description: 'Read the most recent posts from the Pixel agent on Nostr. Use this to see what Pixel has been saying recently.',
+    inputSchema: z.object({
+      limit: z.number().optional().default(5).describe('Number of recent posts to fetch')
+    }),
+    execute: async ({ limit }) => {
+      console.log(`[SYNTROPY] Tool: readPixelNostrFeed (limit=${limit})`);
+      try {
+        const script = `
+const { poolList } = require('/app/plugin-nostr/lib/poolList.js');
+const { SimplePool, nip19, getPublicKey } = require('nostr-tools');
+const WebSocket = require('ws');
+global.WebSocket = WebSocket;
+
+async function run() {
+  const sk = process.env.NOSTR_PRIVATE_KEY;
+  const relays = (process.env.NOSTR_RELAYS || '').split(',');
+  if (!sk || !relays.length) {
+    console.log('[]');
+    process.exit(0);
+  }
+  
+  let pk = '';
+  try {
+    if (sk.startsWith('nsec')) {
+      pk = getPublicKey(nip19.decode(sk).data);
+    } else {
+      pk = getPublicKey(Buffer.from(sk, 'hex'));
+    }
+  } catch (e) {
+    console.error('ERROR: Invalid key');
+    process.exit(1);
+  }
+
+  const pool = new SimplePool();
+  try {
+    const posts = await poolList(pool, relays, [{ authors: [pk], kinds: [1], limit: ${limit} }]);
+    console.log(JSON.stringify(posts.sort((a, b) => b.created_at - a.created_at)));
+  } finally {
+    try { pool.close(relays); } catch (e) {}
+    process.exit(0);
+  }
+}
+run();
+`;
+        const { stdout, stderr } = await execAsync(
+          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { timeout: 30000 }
+        );
+
+        if (stderr && stderr.includes('ERROR:')) {
+          return { error: stderr };
+        }
+
+        const posts = JSON.parse(stdout.trim());
+        await logAudit({ type: 'pixel_nostr_feed_read', count: posts.length });
+        return { posts };
+      } catch (error: any) {
+        return { error: `Failed to read Pixel Nostr feed: ${error.message}` };
+      }
+    }
+  }),
+
 
   readPixelMemories: tool({
     description: `Read Pixel's memories from the PostgreSQL database.

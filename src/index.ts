@@ -279,7 +279,9 @@ PHASE 6 - NARRATIVE & STORYTELLING:
 14. Identify any "story-worthy" events (recoveries, milestones, major shifts) from THIS or RECENT cycles.
 15. If a milestone was reached: Call 'writeEvolutionReport' to update the website/Inner Monologue.
 16. If an internal insight was gained: Call 'writeDiary' to record the agent's perspective.
-17. If a public announcement is warranted: Call 'postToNostr' to broadcast to the network.
+17. If a public announcement is warranted:
+    - FIRST call 'readPixelNostrFeed' (limit=10) to check previous posts and ensure context.
+    - Then call 'postToNostr' to broadcast to the network.
 
 PHASE 7 - WRAP UP:
 18. Call 'scheduleNextRun' to decide when to wake up next.
