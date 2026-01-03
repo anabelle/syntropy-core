@@ -376,6 +376,17 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
           priority: string;
         }> = [];
 
+        // Check existing tasks to avoid duplicates - ONLY check active queue
+        const queuePath = path.resolve(PIXEL_ROOT, 'REFACTOR_QUEUE.md');
+        const queueContent = fs.existsSync(queuePath) ? await fs.readFile(queuePath, 'utf-8') : '';
+
+        // Helper to check if file processing is currently queued
+        const isAlreadyTracked = (filePath: string) => {
+          // Check if the filename appears in the active queue
+          const relativePath = filePath.replace(PIXEL_ROOT, '');
+          return queueContent.includes(relativePath) || queueContent.includes(path.basename(filePath));
+        };
+
         // Define target paths
         const targetPaths: Record<string, string> = {
           'plugin-nostr': path.resolve(PIXEL_ROOT, 'pixel-agent/plugin-nostr/lib'),
@@ -402,13 +413,15 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
                 const filePath = match[2];
                 const fileName = path.basename(filePath);
 
-                suggestions.push({
-                  file: filePath.replace(PIXEL_ROOT, ''),
-                  issue: `Large file: ${lineCount} lines`,
-                  suggestion: `Split ${fileName} into smaller focused modules`,
-                  effort: lineCount > 2000 ? '2-4 hours' : lineCount > 1000 ? '1-2 hours' : '30-60 min',
-                  priority: lineCount > 2000 ? 'High' : lineCount > 1000 ? 'Medium' : 'Low'
-                });
+                if (!isAlreadyTracked(filePath)) {
+                  suggestions.push({
+                    file: filePath.replace(PIXEL_ROOT, ''),
+                    issue: `Large file: ${lineCount} lines`,
+                    suggestion: `Split ${fileName} into smaller focused modules`,
+                    effort: lineCount > 2000 ? '2-4 hours' : lineCount > 1000 ? '1-2 hours' : '30-60 min',
+                    priority: lineCount > 2000 ? 'High' : lineCount > 1000 ? 'Medium' : 'Low'
+                  });
+                }
               }
             }
           } catch (e) {
@@ -432,13 +445,15 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
               const testFile2 = path.join(testDir, `${baseName}.test.ts`);
 
               if (!fs.existsSync(testFile1) && !fs.existsSync(testFile2)) {
-                suggestions.push({
-                  file: srcFile.replace(PIXEL_ROOT, ''),
-                  issue: 'No test file found',
-                  suggestion: `Create test file for ${baseName}`,
-                  effort: '30-60 min',
-                  priority: 'Medium'
-                });
+                if (!isAlreadyTracked(srcFile)) {
+                  suggestions.push({
+                    file: srcFile.replace(PIXEL_ROOT, ''),
+                    issue: 'No test file found',
+                    suggestion: `Create test file for ${baseName}`,
+                    effort: '30-60 min',
+                    priority: 'Medium'
+                  });
+                }
               }
             }
           } catch (e) {

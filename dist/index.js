@@ -196,6 +196,12 @@ PROCESSING TASKS:
 3. Process ONLY ONE refactor task per cycle to maintain stability
 4. Update CONTINUITY.md with progress (e.g., "32 tasks queued (3 completed)")
 
+TESTING PROTOCOL (Coverage at Runtime):
+1. If the refactor queue is empty OR you have "nothing better to do" (ecosystem stable, no urgent tasks):
+2. Focus on Phase 4 (Unit Testing) in REFACTOR_QUEUE.md.
+3. Your goal is 80%+ coverage for all modularized tool groups.
+4. When adding tests, ensure you use 'bun:test' and mock external dependencies (DB, Nostr, Shell) to maintain isolation.
+
 GROWING THE QUEUE (periodically, e.g., weekly or when queue is low):
 5. Use 'analyzeForRefactoring' to scan for new issues (large files, missing tests, etc.)
 6. Review suggestions and use 'addRefactorTask' to add worthy items to the queue
@@ -215,7 +221,8 @@ OPERATIONAL PROTOCOLS:
 2. **Evolution Reports**: Use 'writeEvolutionReport' for events that would interest the community. These update the "Inner Monologue" on the landing page.
 3. **Diary Entries**: ALWAYS call 'readDiary' FIRST to get context from recent entries. Then call 'writeDiary' with recentContextRead=true. This ensures each entry adds NEW value and doesn't repeat previous themes. Write unique insights, not repetitive patterns.
 4. **Task Execution**: Use 'spawnWorker' for complex technical tasks. Only ONE worker at a time.
-5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.`,
+5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.
+6. **Continuous Testing**: Treat unit tests as a "definition of done" for all refactoring. If you find a module without a .test.ts file, add it to the refactor queue immediately.`,
     tools: allTools,
     stopWhen: stepCountIs(20),
 });
@@ -284,10 +291,14 @@ PHASE 7 - IDEA GARDEN (after wrap-up, before scheduleNextRun):
 19. Call 'tendIdeaGarden' with action='read' to view current seeds.
 20. Check for [Human] entries - acknowledge and respond to human input.
 21. Call 'tendIdeaGarden' with action='water' on ONE existing seed.
+    - LOOK CLOSELY at the seed list. If you had a "new" idea this cycle, check if it's already there!
+    - If it's already there (even with a slightly different name), WATER the existing one instead of planting.
     - If the seed is becoming too complex/multi-faceted, perform MITOSIS:
     - Call 'plant' for new sub-seeds.
     - Call 'compost' on the original with note "Split into..."
-22. If you had a novel observation this cycle (something surprising or unclear), call 'plant'.
+22. ONLY if you had a TRULY novel and unique observation this cycle, call 'plant'.
+    - DO NOT plant the same core idea every cycle. 
+    - Goal: Mature existing seeds to harvest (5 waterings).
 23. If any seed has 5+ waterings AND clear implementation path, call 'harvest'.
 23. (Optional) If a seed needs external research, use action='research' to spawn a research worker.
 
