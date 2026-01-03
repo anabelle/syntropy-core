@@ -298,10 +298,14 @@ PHASE 7 - IDEA GARDEN (after wrap-up, before scheduleNextRun):
 19. Call 'tendIdeaGarden' with action='read' to view current seeds.
 20. Check for [Human] entries - acknowledge and respond to human input.
 21. Call 'tendIdeaGarden' with action='water' on ONE existing seed.
+    - LOOK CLOSELY at the seed list. If you had a "new" idea this cycle, check if it's already there!
+    - If it's already there (even with a slightly different name), WATER the existing one instead of planting.
     - If the seed is becoming too complex/multi-faceted, perform MITOSIS:
     - Call 'plant' for new sub-seeds.
     - Call 'compost' on the original with note "Split into..."
-22. If you had a novel observation this cycle (something surprising or unclear), call 'plant'.
+22. ONLY if you had a TRULY novel and unique observation this cycle, call 'plant'.
+    - DO NOT plant the same core idea every cycle. 
+    - Goal: Mature existing seeds to harvest (5 waterings).
 23. If any seed has 5+ waterings AND clear implementation path, call 'harvest'.
 23. (Optional) If a seed needs external research, use action='research' to spawn a research worker.
 
