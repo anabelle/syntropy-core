@@ -252,21 +252,19 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
 
   // HOST_PIXEL_ROOT is the absolute host path where /pixel is mounted.
-  // Docker compose needs --project-directory to resolve volume paths correctly
-  // when running from inside a container via the docker socket.
+  // Docker compose needs this because relative paths (.) resolve to the
+  // container's PWD when running via docker socket, not the host's real path.
   const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
 
   const proc = spawn('docker', [
-    'compose',
-    '--project-directory', hostPixelRoot, // CRITICAL: Use host path, not container path
-    '--profile', 'worker',
+    'compose', '--profile', 'worker',
     'run', '-d',
     '--name', containerName,
     // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
     '-e', `TASK_ID=${taskId}`,
     '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
     'worker'
-  ], { cwd: hostPixelRoot }); // Also set cwd to host path for consistency
+  ], { cwd: PIXEL_ROOT });
 
   let spawnOutput = '';
   let spawnError = '';
@@ -533,16 +531,14 @@ The new Syntropy will read CONTINUITY.md to restore context.
     const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
 
     const proc = spawn('docker', [
-      'compose',
-      '--project-directory', hostPixelRoot, // CRITICAL: Use host path for volume resolution
-      '--profile', 'worker',
+      'compose', '--profile', 'worker',
       'run', '-d',
       '--name', containerName,
       // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
       '-e', `TASK_ID=${taskId}`,
       '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
       'worker'
-    ], { cwd: hostPixelRoot });
+    ], { cwd: PIXEL_ROOT });
 
     let spawnError = '';
     proc.stderr.on('data', (d) => { spawnError += d.toString(); });
