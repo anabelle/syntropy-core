@@ -1469,7 +1469,7 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
         const jsonQuery = `SELECT COALESCE(json_agg(t), '[]'::json) FROM (${query}) t`;
 
         const { stdout, stderr } = await execAsync(
-          `docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -t -c "${jsonQuery.replace(/"/g, '\\"')}"`,
+          `docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -A -t -c "${jsonQuery.replace(/"/g, '\\"')}"`,
           { timeout: 15000 }
         );
 

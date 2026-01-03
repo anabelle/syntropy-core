@@ -1,6 +1,6 @@
 FROM oven/bun:1-slim
 
-# Install Docker CLI, git, and other essentials
+# Install Docker CLI, git, Node.js/npm, and other essentials
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -8,6 +8,8 @@ RUN apt-get update && \
       curl \
       git \
       jq \
+      nodejs \
+      npm \
       wget && \
     # Install Docker CLI
     curl -fsSL https://get.docker.com | sh && \

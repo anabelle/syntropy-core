@@ -1345,7 +1345,7 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
                 const query = `SELECT id, author, content, tags, created_at, updated_at FROM diary_entries${whereClause} ORDER BY created_at DESC${limitClause}`;
                 // Format as JSON using PostgreSQL
                 const jsonQuery = `SELECT COALESCE(json_agg(t), '[]'::json) FROM (${query}) t`;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -t -c "${jsonQuery.replace(/"/g, '\\"')}"`, { timeout: 15000 });
+                const { stdout, stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -A -t -c "${jsonQuery.replace(/"/g, '\\"')}"`, { timeout: 15000 });
                 if (stderr && stderr.toLowerCase().includes('error')) {
                     return { error: stderr };
                 }
