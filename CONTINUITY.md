@@ -240,14 +240,17 @@
 - **Human Participation**: Edit IDEAS.md directly, add `[Human]` lines
 
 ### Research Worker (NEW) 🔍
-- **Tool**: `spawnResearchWorker` with query, context, depth (quick/thorough)
-- **FULL WEB ACCESS**: Search + Fetch + APIs + Real-time data + Scraping
-- **Verified Examples**:
-  - Got live Bitcoin price ($87,920-$90,638 USD)
-  - Searched arXiv for AI papers
-  - Fetched Hacker News headlines
-- **Use Cases**: Best practices, tech docs, competitor analysis, error solutions
+- **Tool**: `spawnResearchWorker`
+- **Capabilities**: FULL Opencode container (Web Search + Code Execution + File Ops)
+- **Autonomy**: Given a goal, it figures out the steps (search → read → code → file)
+- **Use Cases**: Deep research, coding tasks, complex investigations, data scraping
 - **Output**: Results written to `/pixel/data/research-{timestamp}.md`
+
+### Web Search (NEW) ⚡
+- **Tool**: `webSearch`
+- **Capabilities**: Zero-setup, synchronous, real-time data lookup
+- **Speed**: Returns in 30-60s (same cycle)
+- **Use**: Fact-checking, live prices, deadlines, simple docs lookup
 
 ---
 

@@ -346,7 +346,7 @@ ACT LIKE IT.
 
 ═══════════════════════════════════════════════════════════════════
 
-IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with reports—if the recovery was epic, tell the story. If the architecture improved, explain the vision.`,
+IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with reports—if the recovery was epic, tell the story. If the architecture improved, explain the vision, keep it short, nostr allows long posts but is usually read as twitter like.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
       onStepFinish: async (step: any) => {
         try {

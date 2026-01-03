@@ -1729,30 +1729,39 @@ EXAMPLES:
   // ============================================
 
   spawnResearchWorker: tool({
-    description: `Spawn a research worker with FULL WEB ACCESS to search, fetch, and gather information.
+    description: `Spawn an autonomous worker with FULL CAPABILITIES in an isolated container.
 
-CAPABILITIES (verified working):
-- Web Search: Can search Google/Bing for any topic (tested: found arXiv papers, GitHub repos)
-- Fetch URLs: Can read any public webpage, API endpoint, or documentation
-- Real-time Data: Can get current prices (BTC, stocks), weather, news headlines
-- API Access: Can call public REST APIs and parse JSON responses
-- Scraping: Can extract structured data from HTML pages
-- Codebase: Can correlate findings with your existing code
+This is a FULL Opencode agent container. It can do ANYTHING you can imagine:
 
-EXAMPLES OF WHAT IT CAN DO:
-- "What is the current Bitcoin price?" → Searches and returns live price
-- "Research autonomous AI agent architectures" → Finds papers, summarizes approaches
-- "How do other projects implement X?" → Competitor analysis
-- "What does the API documentation say about Y?" → Fetches and summarizes docs
-- "What are the best practices for Z in 2024?" → Searches, reads articles, synthesizes
+🌐 WEB ACCESS:
+- Web Search (Google, Bing, etc.)
+- Fetch any URL (APIs, docs, webpages)
+- Real-time data (prices, weather, news)
+- Scrape and parse structured data
 
-USE THIS WHEN:
-- You need external knowledge to solve a problem
-- You want to validate an approach before implementing
-- An Idea Garden seed needs research
-- You encounter an error and want to find solutions online
+💻 CODE EXECUTION:
+- Run bash commands
+- Execute scripts (Python, Node, etc.)
+- Run tests and analyze output
+- Build and compile code
 
-The worker runs autonomously and writes findings to a file. Check status with checkWorkerStatus.`,
+📝 FILE OPERATIONS:
+- Read any file in /pixel
+- Write new files
+- Edit existing code
+- Create documentation
+
+🔧 COMBINED WORKFLOWS:
+- "Research X, then write a summary to /pixel/docs/X.md"
+- "Find the API docs for Y, then create a wrapper in /pixel/src/"
+- "Investigate error Z online, then apply the fix"
+- "Search for best practices, analyze our code, suggest improvements"
+- "Fetch competitor's public repo, compare to ours, write analysis"
+
+The worker is autonomous - give it a goal and let it figure out the steps.
+Results are written to files you specify. Check status with checkWorkerStatus.
+
+Think of this as a junior developer you can delegate complex tasks to.`,
 
     inputSchema: z.object({
       query: z.string().describe('What to research. Be specific about what you want to learn.'),
@@ -1770,55 +1779,42 @@ The worker runs autonomously and writes findings to a file. Check status with ch
       const defaultOutput = `/pixel/data/research-${timestamp}.md`;
       const targetFile = outputFile || defaultOutput;
 
-      const depthInstructions = depth === 'thorough'
-        ? `Find at least 5 relevant sources. For each source:
-1. Search for the topic using web search
-2. Fetch and read the top results
-3. Extract key insights and quotes
-4. Cross-reference findings across sources
-5. Identify patterns and best practices`
-        : `Find 2-3 relevant sources quickly. For each:
-1. Search for the topic
-2. Fetch top 2 results
-3. Summarize key points`;
+      // More flexible task framing - this is a full agent, not just research
+      const workerTask = `AUTONOMOUS TASK
+================
 
-      const researchTask = `RESEARCH TASK
-==============
-
-QUERY: ${query}
+GOAL: ${query}
 ${context ? `CONTEXT: ${context}` : ''}
-DEPTH: ${depth}
 
-INSTRUCTIONS:
-${depthInstructions}
+You are a fully capable agent in an isolated container with access to:
+- Web search and URL fetching
+- Bash/shell commands
+- File read/write/edit in /pixel
+- Code execution (Python, Node, etc.)
+- Full codebase at /pixel
 
-OUTPUT FORMAT:
-Write your findings to ${targetFile} in this format:
+APPROACH:
+${depth === 'thorough'
+          ? `Take your time. Be thorough. Research from multiple angles.
+Check 5+ sources if gathering information. Run tests if coding.
+Cross-reference findings. Be comprehensive.`
+          : `Be efficient. Get the essentials quickly.
+If researching: 2-3 good sources.
+If coding: minimal viable solution.
+Don't over-engineer.`}
 
-# Research: ${query}
-> Generated: ${new Date().toISOString()}
-> Depth: ${depth}
+DELIVERABLE:
+Write your output to: ${targetFile}
 
-## Sources
-- [Source Title](url): One-line summary
+Format your output clearly with:
+- What you did
+- What you found/built
+- Key insights or next steps
 
-## Key Findings
-1. Finding with supporting evidence
-2. Finding with supporting evidence
-
-## Recommendations
-- Actionable recommendation based on research
-
-## Raw Notes
-[Any additional context or quotes worth preserving]
-
----
-END OF RESEARCH TASK
-
-After writing the file, confirm it was saved successfully.`;
+You have full autonomy. Figure out the best approach to achieve the goal.`;
 
       const result = await spawnWorkerInternal({
-        task: researchTask,
+        task: workerTask,
         context: `Web research task. Use the Search tool to find information, then webfetch to read pages. ${context || ''}`,
         priority: 'normal'
       });
