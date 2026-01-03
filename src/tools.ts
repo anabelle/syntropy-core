@@ -2193,7 +2193,7 @@ ${logContent.split('\n').map((l: string) => `  ${l}`).join('\n')}
           let continuity = await fs.readFile(CONTINUITY_PATH, 'utf-8');
           continuity = continuity.replace(
             /## 📬 Pending Tasks\n\n/,
-            `## 📬 Pending Tasks\n${taskEntry}\n`
+            `## 📬 Pending Tasks\n\n${taskEntry}\n`
           );
           await fs.writeFile(CONTINUITY_PATH, continuity);
 
