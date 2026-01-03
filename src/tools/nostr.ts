@@ -75,7 +75,7 @@ async function run() {
 
   const pool = new SimplePool();
   try {
-    const posts = await pool.querySync(relays, { authors: [pk], kinds: [1], limit: ${limit} });
+    const posts = await pool.list(relays, [{ authors: [pk], kinds: [1], limit: ${limit} }]);
     console.log(JSON.stringify(posts.sort((a, b) => b.created_at - a.created_at)));
   } finally {
     try { pool.close(relays); } catch (e) {}
@@ -145,7 +145,7 @@ async function run() {
 
   const pool = new SimplePool();
   try {
-    const mentions = await pool.querySync(relays, { '#p': [pk], kinds: [1], limit: ${limit} });
+    const mentions = await pool.list(relays, [{ '#p': [pk], kinds: [1], limit: ${limit} }]);
     const filtered = mentions.filter(m => m.pubkey !== pk);
     console.log(JSON.stringify(filtered.sort((a, b) => b.created_at - a.created_at)));
   } finally {
