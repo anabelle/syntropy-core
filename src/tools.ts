@@ -1442,14 +1442,24 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
   }),
 
   writeDiary: tool({
-    description: 'Write a new diary entry to the persistent repository. Use this to record high-value insights, evolutionary milestones, or narrative shifts.',
+    description: 'Write a new diary entry to the persistent repository. IMPORTANT: You MUST first call readDiary to get context from recent entries before writing. This prevents repetitive entries. Use this to record high-value insights, evolutionary milestones, or narrative shifts.',
     inputSchema: z.object({
       author: z.string().describe('Author name (e.g., "Syntropy", "Pixel")'),
-      content: z.string().describe('Diary entry content'),
-      tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight", "crisis-resolved"])')
+      content: z.string().describe('Diary entry content - must be unique and not repeat themes from recent entries'),
+      tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight", "crisis-resolved"])'),
+      recentContextRead: z.boolean().describe('Confirm you have read recent diary entries via readDiary before writing. Set to true only after calling readDiary first.')
     }),
-    execute: async ({ author, content, tags = [] }) => {
-      console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')})`);
+    execute: async ({ author, content, tags = [], recentContextRead }) => {
+      console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')}, contextRead=${recentContextRead})`);
+
+      // Enforce context reading requirement
+      if (!recentContextRead) {
+        return {
+          error: 'CONTEXT_REQUIRED: You must first call readDiary to read recent entries before writing a new diary entry. This prevents repetitive entries. After reading, call writeDiary again with recentContextRead=true.',
+          hint: 'Call readDiary with limit=5 to see recent entries, then write something that adds NEW value based on that context.'
+        };
+      }
+
       try {
         const id = crypto.randomUUID();
         const now = new Date();
