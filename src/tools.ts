@@ -2194,6 +2194,16 @@ ${logContent.split('\n').map((l: string) => `  ${l}`).join('\n')}
             `## 🍂 Compost\n\n${fullSeed.replace(/- \*\*Waterings\*\*: \d+/, '- **Waterings**: HARVESTED')}`
           );
 
+          // Mulch: Keep only 5 most recent compost items (decomposition)
+          const compostMatchH = garden.match(/## 🍂 Compost([\s\S]*)/);
+          if (compostMatchH) {
+            const content = compostMatchH[1];
+            const headers = [...content.matchAll(/\n### /g)];
+            if (headers.length > 5 && headers[5].index !== undefined) {
+              garden = garden.replace(content, content.slice(0, headers[5].index));
+            }
+          }
+
           await fs.writeFile(IDEAS_PATH, garden);
 
           // Append to CONTINUITY.md pending tasks
@@ -2243,6 +2253,16 @@ ${logContent.split('\n').map((l: string) => `  ${l}`).join('\n')}
             /## 🍂 Compost\n/,
             `## 🍂 Compost\n\n${updatedSeed}`
           );
+
+          // Mulch: Keep only 5 most recent compost items (decomposition)
+          const compostMatchC = garden.match(/## 🍂 Compost([\s\S]*)/);
+          if (compostMatchC) {
+            const content = compostMatchC[1];
+            const headers = [...content.matchAll(/\n### /g)];
+            if (headers.length > 5 && headers[5].index !== undefined) {
+              garden = garden.replace(content, content.slice(0, headers[5].index));
+            }
+          }
 
           garden = garden.replace(/\n{3,}/g, '\n\n');
           await fs.writeFile(IDEAS_PATH, garden);
