@@ -39,7 +39,7 @@ export const logAudit = async (entry: any) => {
   }
 };
 
-export const syncAll = async () => {
+export const syncAll = async (context?: { reason?: string; files?: string[] }) => {
   console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
   try {
     const submodules = [
@@ -54,6 +54,76 @@ export const syncAll = async () => {
     if (!ghToken) {
       console.warn('[SYNTROPY] GH_TOKEN not set - git push will fail');
     }
+
+    // Generate commit message based on context
+    const generateCommitMessage = async (repoPath: string, isSubmodule: boolean): Promise<string> => {
+      // If explicit reason provided, use it
+      if (context?.reason) {
+        return context.reason;
+      }
+
+      // Otherwise, analyze the diff to generate a meaningful message
+      try {
+        const { stdout: diffStat } = await execAsync('git diff --cached --stat', { cwd: repoPath });
+        const { stdout: diffFiles } = await execAsync('git diff --cached --name-only', { cwd: repoPath });
+        
+        const files = diffFiles.trim().split('\n').filter(Boolean);
+        if (files.length === 0) {
+          return 'chore(syntropy): no changes';
+        }
+
+        // Categorize changes
+        const categories: Record<string, string[]> = {
+          docs: [],
+          src: [],
+          config: [],
+          build: [],
+          other: []
+        };
+
+        for (const file of files) {
+          if (file.match(/\.(md|txt)$/i) || file.includes('docs/')) {
+            categories.docs.push(file);
+          } else if (file.match(/\.(ts|js|tsx|jsx)$/) && (file.includes('src/') || file.includes('lib/'))) {
+            categories.src.push(file);
+          } else if (file.match(/\.(json|ya?ml|toml|env)$|config/i)) {
+            categories.config.push(file);
+          } else if (file.includes('dist/') || file.includes('build/')) {
+            categories.build.push(file);
+          } else {
+            categories.other.push(file);
+          }
+        }
+
+        // Generate message based on what changed
+        const parts: string[] = [];
+        if (categories.src.length > 0) {
+          const mainFile = path.basename(categories.src[0], path.extname(categories.src[0]));
+          parts.push(`update ${mainFile}${categories.src.length > 1 ? ` +${categories.src.length - 1}` : ''}`);
+        }
+        if (categories.docs.length > 0) {
+          parts.push(`docs`);
+        }
+        if (categories.config.length > 0) {
+          parts.push(`config`);
+        }
+        if (categories.build.length > 0 && parts.length === 0) {
+          parts.push(`build outputs`);
+        }
+
+        if (parts.length === 0) {
+          parts.push(`${files.length} file${files.length > 1 ? 's' : ''}`);
+        }
+
+        const scope = isSubmodule ? path.basename(repoPath) : 'pixel';
+        return `chore(${scope}): ${parts.join(', ')} [skip ci]`;
+      } catch (e) {
+        // Fallback to generic message
+        return isSubmodule 
+          ? `chore(${path.basename(repoPath)}): sync [skip ci]`
+          : 'chore(syntropy): update submodule refs [skip ci]';
+      }
+    };
 
     // Step 1: Push each submodule first
     for (const submodule of submodules) {
@@ -71,9 +141,13 @@ export const syncAll = async () => {
         }
 
         await execAsync('git add .', { cwd: repo });
+        
+        // Generate smart commit message
+        const commitMsg = await generateCommitMessage(repo, true);
+        
         try {
-          await execAsync('git commit -m "chore(syntropy): autonomous sync [skip ci]"', { cwd: repo });
-          console.log(`[SYNTROPY] Committed changes in ${submodule}`);
+          await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: repo });
+          console.log(`[SYNTROPY] Committed changes in ${submodule}: ${commitMsg}`);
         } catch (e) {
           // No changes to commit
         }
@@ -106,9 +180,12 @@ export const syncAll = async () => {
       // Also add any other changes in parent repo
       await execAsync('git add .', { cwd: PIXEL_ROOT });
       
+      // Generate smart commit message for parent
+      const parentCommitMsg = await generateCommitMessage(PIXEL_ROOT, false);
+      
       try {
-        await execAsync('git commit -m "chore(syntropy): update submodule refs [skip ci]"', { cwd: PIXEL_ROOT });
-        console.log('[SYNTROPY] Committed submodule updates in parent');
+        await execAsync(`git commit -m "${parentCommitMsg.replace(/"/g, '\\"')}"`, { cwd: PIXEL_ROOT });
+        console.log(`[SYNTROPY] Committed in parent: ${parentCommitMsg}`);
       } catch (e) {
         // No changes
       }

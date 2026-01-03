@@ -344,13 +344,13 @@ IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with re
             }))
         });
         console.log('\n--- SYNTROPY OUTPUT ---\n', result.text.slice(0, 2000), '\n-----------------------\n');
-        // Auto-sync all repos at end of cycle (opt-in via AUTONOMOUS_SYNC=true)
+        // Auto-sync is DISABLED by default. Syntropy should use the gitSync tool explicitly
+        // when it has made meaningful changes worth committing.
+        // Legacy opt-in: set AUTONOMOUS_SYNC=true to enable blind sync at cycle end
         if (process.env.AUTONOMOUS_SYNC === 'true') {
+            console.warn('[SYNTROPY] AUTONOMOUS_SYNC is enabled - consider using gitSync tool instead for better commit messages');
             const { syncAll } = await import('./utils');
-            await syncAll();
-        }
-        else {
-            await logAudit({ type: 'auto_sync_skipped', reason: 'AUTONOMOUS_SYNC not enabled' });
+            await syncAll({ reason: 'chore(syntropy): end-of-cycle sync' });
         }
         // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
         try {

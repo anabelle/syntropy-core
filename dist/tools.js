@@ -81,6 +81,59 @@ export const tools = {
             }
         }
     }),
+    gitSync: tool({
+        description: `Commit and push changes across all repositories. Use this ONLY when you have made meaningful changes that should be persisted. 
+    
+WHEN TO USE:
+- After updating CONTINUITY.md with significant changes
+- After writing evolution reports
+- After successful code mutations
+- After modifying configuration files
+
+WHEN NOT TO USE:
+- After routine read operations
+- After failed operations (nothing to commit)
+- Multiple times in rapid succession (rate limit: once per 10 minutes)
+
+The reason you provide becomes the commit message - make it descriptive!`,
+        inputSchema: z.object({
+            reason: z.string().describe('A descriptive commit message explaining what changed and why. This becomes the git commit message.')
+        }),
+        execute: async ({ reason }) => {
+            console.log(`[SYNTROPY] Tool: gitSync - "${reason}"`);
+            // Rate limiting - prevent spam commits
+            const lastSyncFile = path.join(PIXEL_ROOT, 'data', '.last-sync');
+            const now = Date.now();
+            const minInterval = 10 * 60 * 1000; // 10 minutes
+            try {
+                if (fs.existsSync(lastSyncFile)) {
+                    const lastSync = parseInt(await fs.readFile(lastSyncFile, 'utf-8'), 10);
+                    if (now - lastSync < minInterval) {
+                        const waitMins = Math.ceil((minInterval - (now - lastSync)) / 60000);
+                        return {
+                            skipped: true,
+                            message: `Rate limited. Last sync was ${Math.round((now - lastSync) / 60000)} minutes ago. Wait ${waitMins} more minutes.`
+                        };
+                    }
+                }
+            }
+            catch (e) {
+                // Ignore read errors
+            }
+            try {
+                await syncAll({ reason });
+                // Update last sync timestamp
+                await fs.ensureDir(path.dirname(lastSyncFile));
+                await fs.writeFile(lastSyncFile, now.toString());
+                await logAudit({ type: 'git_sync', reason });
+                return { success: true, message: `Synced with commit: "${reason}"` };
+            }
+            catch (error) {
+                await logAudit({ type: 'git_sync_error', reason, error: error.message });
+                return { error: `Sync failed: ${error.message}` };
+            }
+        }
+    }),
     readAgentLogs: tool({
         description: 'Read recent logs from the Pixel agent. Automatically filters noise for Syntropy intelligence.',
         inputSchema: z.object({
@@ -764,7 +817,7 @@ Use 'narratives' to see digests/reports/timeline, 'topics' for emerging stories,
                     // 5. Build agent specifically and restart
                     await execAsync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
                     await execAsync('docker restart pixel-agent-1', { timeout: 20000 });
-                    await syncAll();
+                    await syncAll({ reason: `feat(pixel-agent): mutate ${file}` });
                     await logAudit({ type: 'mutation_success', file });
                     return { success: true, mutatedFile: file };
                 }
