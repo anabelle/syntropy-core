@@ -1747,6 +1747,28 @@ After writing the file, confirm it was saved successfully.`;
         return { error: result.error };
       }
 
+      // Auto-prune old research files (keep last 20)
+      const MAX_RESEARCH_FILES = 20;
+      try {
+        const dataDir = path.join(PIXEL_ROOT, 'data');
+        const files = await fs.readdir(dataDir);
+        const researchFiles = files
+          .filter(f => f.startsWith('research-') && f.endsWith('.md'))
+          .sort()
+          .reverse(); // Newest first (timestamp in name)
+
+        if (researchFiles.length > MAX_RESEARCH_FILES) {
+          const toDelete = researchFiles.slice(MAX_RESEARCH_FILES);
+          for (const file of toDelete) {
+            await fs.remove(path.join(dataDir, file));
+            console.log(`[SYNTROPY] Pruned old research file: ${file}`);
+          }
+        }
+      } catch (pruneError) {
+        // Don't fail on prune errors
+        console.log(`[SYNTROPY] Research prune warning: ${pruneError}`);
+      }
+
       await logAudit({ type: 'research_worker_spawned', query, taskId: result.taskId, outputFile: targetFile });
 
       return {
