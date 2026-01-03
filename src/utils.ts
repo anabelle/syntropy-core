@@ -71,11 +71,36 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
       }
     };
 
+    const ensureCleanBranchState = async (repoPath: string, repoName: string) => {
+      try {
+        const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
+        const branch = branchRaw.trim();
+
+        if (branch.startsWith('conflict/')) {
+          console.warn(`[SYNTROPY] 🚨 DETECTED STUCK CONFLICT BRANCH: ${branch} in ${repoName}`);
+
+          // Try to determine target branch (main or master)
+          // We check which one exists locally
+          const { stdout: branches } = await execAsync('git branch', { cwd: repoPath });
+          const target = branches.includes('main') ? 'main' : 'master';
+
+          console.log(`[SYNTROPY] 🚑 Self-healing: Force switching back to ${target}...`);
+          await execAsync(`git checkout ${target}`, { cwd: repoPath });
+          console.log(`[SYNTROPY] ✅ Restored ${repoName} to ${target}`);
+        }
+      } catch (e: any) {
+        console.warn(`[SYNTROPY] Self-healing check failed for ${repoName}: ${e.message}`);
+      }
+    };
+
     const handleRepoSync = async (repoPath: string, isSubmodule: boolean): Promise<boolean> => {
       if (!fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git'))) return false;
 
       const repoName = path.basename(repoPath);
       console.log(`[SYNTROPY] 🔄 Syncing ${repoName}...`);
+
+      // 0. SELF-HEAL: Check if we are stuck on a conflict branch from a previous crash
+      await ensureCleanBranchState(repoPath, repoName);
 
       await configureGit(repoPath);
 
