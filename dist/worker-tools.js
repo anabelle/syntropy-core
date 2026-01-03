@@ -137,23 +137,27 @@ export async function spawnWorkerInternal(params) {
     if (cleanup.attempted > 0) {
         console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
     }
-    // 0. Spawn cooldown: Prevent rapid respawn cascades after failures
-    //    Check if last task completed within SPAWN_COOLDOWN_MS
-    const SPAWN_COOLDOWN_MS = 60_000; // 60 seconds between spawns
+    // 0. Spawn cooldown: Prevent rapid respawn cascades after FAILURES
+    //    Only applies if the last task FAILED within SPAWN_COOLDOWN_MS
+    //    Successful completions don't trigger cooldown (allows back-to-back productive work)
+    const SPAWN_COOLDOWN_MS = 60_000; // 60 seconds cooldown after failures
     const ledger = await readTaskLedger();
     const recentTasks = ledger.tasks
         .filter(t => t.completedAt)
         .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
     if (recentTasks.length > 0) {
-        const lastCompleted = new Date(recentTasks[0].completedAt).getTime();
+        const lastTask = recentTasks[0];
+        const lastCompleted = new Date(lastTask.completedAt).getTime();
         const elapsed = Date.now() - lastCompleted;
-        if (elapsed < SPAWN_COOLDOWN_MS) {
+        // Only enforce cooldown if last task FAILED (exitCode !== 0 or status === 'failed')
+        const lastTaskFailed = lastTask.status === 'failed' || (lastTask.exitCode !== undefined && lastTask.exitCode !== 0);
+        if (lastTaskFailed && elapsed < SPAWN_COOLDOWN_MS) {
             const waitSec = Math.ceil((SPAWN_COOLDOWN_MS - elapsed) / 1000);
-            await logAudit({ type: 'worker_spawn_rejected', reason: 'cooldown', waitSeconds: waitSec, lastTaskId: recentTasks[0].id });
+            await logAudit({ type: 'worker_spawn_rejected', reason: 'cooldown_after_failure', waitSeconds: waitSec, lastTaskId: lastTask.id });
             return {
-                error: `Spawn cooldown active. Last task completed ${Math.floor(elapsed / 1000)}s ago. Wait ${waitSec}s before spawning another worker.`,
-                runningTaskId: recentTasks[0].id,
-                runningTaskStatus: recentTasks[0].status,
+                error: `Spawn cooldown active (last task failed). Wait ${waitSec}s before retrying. Last task: ${lastTask.id}`,
+                runningTaskId: lastTask.id,
+                runningTaskStatus: lastTask.status,
             };
         }
     }
