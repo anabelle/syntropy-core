@@ -6,7 +6,8 @@ dotenv.config();
 // Detect if running in Docker (PIXEL_ROOT would be /app in container)
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 // Path configuration - use env vars or sensible defaults
-export const PIXEL_ROOT = process.env.PIXEL_ROOT || (isDocker ? '/app' : path.resolve('..'));
+// Path configuration - use env vars or sensible defaults
+export const PIXEL_ROOT = process.env.PIXEL_ROOT || (isDocker ? '/app' : path.resolve(__dirname, '../../..'));
 export const PIXEL_AGENT_DIR = process.env.PIXEL_AGENT_DIR || path.resolve(PIXEL_ROOT, 'pixel-agent');
 // Model Selection: Primary intelligence for orchestration
 // Use OpenRouter for free/cheaper models, or direct OpenAI
