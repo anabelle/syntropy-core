@@ -31,9 +31,11 @@ export const characterTools = {
         description: 'Mutate a specific part of Pixel\'s character DNA. Automatically builds and reboots the agent. Includes pre-flight checks, syntax validation, and post-restart verification.',
         inputSchema: z.object({
             file: z.enum(['bio.ts', 'topics.ts', 'style.ts', 'postExamples.ts', 'messageExamples.ts']),
-            content: z.string().describe('The full content of the file to write')
+            content: z.string().describe('The full content of the file to write'),
+            goal: z.string().describe('Explain WHY you are making this change (e.g. "Increase stoicism")'),
+            outcome: z.string().describe('What specific behavior shift do you expect?)')
         }),
-        execute: async ({ file, content }) => {
+        execute: async ({ file, content, goal, outcome }) => {
             console.log(`[SYNTROPY] Tool: mutateCharacter (${file})`);
             const filePath = path.resolve(CHARACTER_DIR, file);
             const tempFilePath = filePath + '.tmp';
@@ -150,8 +152,8 @@ export const characterTools = {
                     // === SUCCESS ===
                     // 9. Clean up backup and sync
                     await fs.remove(backupFilePath);
-                    await syncAll({ reason: `feat(pixel-agent): mutate ${file}` });
-                    await logAudit({ type: 'mutation_success', file });
+                    await syncAll({ reason: `feat(character): update ${file} | Goal: ${goal} | Outcome: ${outcome}` });
+                    await logAudit({ type: 'mutation_success', file, goal, outcome });
                     return { success: true, mutatedFile: file, verified: true };
                 }
                 catch (buildError) {

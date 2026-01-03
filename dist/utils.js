@@ -34,8 +34,7 @@ export const logAudit = async (entry) => {
     }
 };
 export const syncAll = async (context) => {
-    console.log('[SYNTROPY] Initiating Ultra-Resilient Ecosystem Sync...');
-    const MAX_RETRIES = 3;
+    console.log('[SYNTROPY] Initiating ecosystem-wide GitHub sync...');
     try {
         const submodules = [
             'lnpixels',
@@ -46,146 +45,150 @@ export const syncAll = async (context) => {
         // Configure git for container environment
         const ghToken = process.env.GH_TOKEN;
         if (!ghToken) {
-            console.warn('[SYNTROPY] GH_TOKEN not set - operations requiring auth will fail');
+            console.warn('[SYNTROPY] GH_TOKEN not set - git push will fail');
         }
-        const configureGit = async (cwd) => {
+        // Generate commit message based on context
+        const generateCommitMessage = async (repoPath, isSubmodule) => {
+            // If explicit reason provided, use it
+            if (context?.reason) {
+                return context.reason;
+            }
+            // Otherwise, analyze the diff to generate a meaningful message
             try {
-                await execAsync(`git config --global --add safe.directory ${cwd}`, { cwd }).catch(() => { });
-                if (ghToken) {
-                    await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd }).catch(() => { });
+                const { stdout: diffStat } = await execAsync('git diff --cached --stat', { cwd: repoPath });
+                const { stdout: diffFiles } = await execAsync('git diff --cached --name-only', { cwd: repoPath });
+                const files = diffFiles.trim().split('\n').filter(Boolean);
+                if (files.length === 0) {
+                    return 'chore(syntropy): no changes';
                 }
-                // Ensure we track remote properly
-                await execAsync('git config pull.rebase true', { cwd }).catch(() => { });
+                // Categorize changes
+                const categories = {
+                    docs: [],
+                    src: [],
+                    config: [],
+                    build: [],
+                    other: []
+                };
+                for (const file of files) {
+                    if (file.match(/\.(md|txt)$/i) || file.includes('docs/')) {
+                        categories.docs.push(file);
+                    }
+                    else if (file.match(/\.(ts|js|tsx|jsx)$/) && (file.includes('src/') || file.includes('lib/'))) {
+                        categories.src.push(file);
+                    }
+                    else if (file.match(/\.(json|ya?ml|toml|env)$|config/i)) {
+                        categories.config.push(file);
+                    }
+                    else if (file.includes('dist/') || file.includes('build/')) {
+                        categories.build.push(file);
+                    }
+                    else {
+                        categories.other.push(file);
+                    }
+                }
+                // Generate message based on what changed
+                const parts = [];
+                if (categories.src.length > 0) {
+                    const mainFile = path.basename(categories.src[0], path.extname(categories.src[0]));
+                    parts.push(`update ${mainFile}${categories.src.length > 1 ? ` +${categories.src.length - 1}` : ''}`);
+                }
+                if (categories.docs.length > 0) {
+                    parts.push(`docs`);
+                }
+                if (categories.config.length > 0) {
+                    parts.push(`config`);
+                }
+                if (categories.build.length > 0 && parts.length === 0) {
+                    parts.push(`build outputs`);
+                }
+                if (parts.length === 0) {
+                    parts.push(`${files.length} file${files.length > 1 ? 's' : ''}`);
+                }
+                const scope = isSubmodule ? path.basename(repoPath) : 'pixel';
+                return `chore(${scope}): ${parts.join(', ')} [skip ci]`;
             }
             catch (e) {
-                // Ignore config errors
+                // Fallback to generic message
+                return isSubmodule
+                    ? `chore(${path.basename(repoPath)}): sync [skip ci]`
+                    : 'chore(syntropy): update submodule refs [skip ci]';
             }
         };
-        const ensureCleanBranchState = async (repoPath, repoName) => {
-            try {
-                const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
-                const branch = branchRaw.trim();
-                if (branch.startsWith('conflict/')) {
-                    console.warn(`[SYNTROPY] 🚨 DETECTED STUCK CONFLICT BRANCH: ${branch} in ${repoName}`);
-                    // Get the default branch from remote
-                    let target = 'master'; // fallback
-                    try {
-                        const { stdout: remoteInfo } = await execAsync('git remote show origin', { cwd: repoPath });
-                        const headMatch = remoteInfo.match(/HEAD branch:\s*(\S+)/);
-                        if (headMatch) {
-                            target = headMatch[1];
-                        }
-                    }
-                    catch (e) {
-                        // Fallback: check if main or master exists
-                        const { stdout: branchesRaw } = await execAsync('git branch --format="%(refname:short)"', { cwd: repoPath });
-                        const branches = branchesRaw.split('\n').map(b => b.trim());
-                        target = branches.includes('main') ? 'main' : 'master';
-                    }
-                    console.log(`[SYNTROPY] 🚑 Self-healing: Force switching back to ${target}...`);
-                    await execAsync(`git checkout -f ${target}`, { cwd: repoPath });
-                    await execAsync(`git reset --hard origin/${target}`, { cwd: repoPath }).catch(() => { });
-                    console.log(`[SYNTROPY] ✅ Restored ${repoName} to ${target}`);
-                }
-            }
-            catch (e) {
-                console.warn(`[SYNTROPY] Self-healing check failed for ${repoName}: ${e.message}`);
-            }
-        };
-        const handleRepoSync = async (repoPath, isSubmodule) => {
-            if (!fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git')))
-                return false;
-            const repoName = path.basename(repoPath);
-            console.log(`[SYNTROPY] 🔄 Syncing ${repoName}...`);
-            // 0. SELF-HEAL: Check if we are stuck on a conflict branch from a previous crash
-            await ensureCleanBranchState(repoPath, repoName);
-            await configureGit(repoPath);
-            try {
-                // Detect current branch first
-                const { stdout: currentBranchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
-                const currentBranch = currentBranchRaw.trim();
-                // 1. FETCH REMOTE to see what's ahead
-                await execAsync(`git fetch origin ${currentBranch}`, { cwd: repoPath });
-                // 2. STAGE & COMMIT LOCAL CHANGES
-                await execAsync('git add .', { cwd: repoPath });
-                // Generate message
-                let commitMsg = '';
-                if (context?.reason) {
-                    commitMsg = context.reason;
-                }
-                else {
-                    // Quick diff check to see if we need to generate a message
-                    try {
-                        const { stdout } = await execAsync('git diff --cached --name-only', { cwd: repoPath });
-                        if (stdout.trim()) {
-                            // Determine scope
-                            const isDocs = stdout.includes('.md') || stdout.includes('docs/');
-                            const isSrc = stdout.includes('.ts') || stdout.includes('.js');
-                            const type = isDocs ? 'docs' : 'feat';
-                            const scope = isSubmodule ? repoName : 'pixel';
-                            commitMsg = `${type}(${scope}): auto-sync ${new Date().toISOString()}`;
-                        }
-                    }
-                    catch (e) { }
-                }
-                if (commitMsg) {
-                    try {
-                        await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: repoPath });
-                        console.log(`[SYNTROPY] ✅ Committed ${repoName}: ${commitMsg}`);
-                    }
-                    catch (e) {
-                        // Nothing to commit, which is fine
-                    }
-                }
-                // 3. REBASE onto remote to maintain linear history
-                // This is the key change: instead of creating conflict branches, we rebase
-                try {
-                    console.log(`[SYNTROPY] ⬇️  Rebasing ${repoName} onto origin/${currentBranch}...`);
-                    await execAsync(`git rebase origin/${currentBranch}`, { cwd: repoPath });
-                }
-                catch (rebaseError) {
-                    console.warn(`[SYNTROPY] ⚠️ Rebase conflict in ${repoName}. Aborting and resetting to remote.`);
-                    // Abort the rebase and reset to remote - remote is source of truth
-                    await execAsync('git rebase --abort', { cwd: repoPath }).catch(() => { });
-                    await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
-                    console.warn(`[SYNTROPY] 🔄 Reset ${repoName} to origin/${currentBranch}. Local changes were discarded.`);
-                    return false;
-                }
-                // 4. PUSH (should always be fast-forward now)
-                try {
-                    await execAsync(`git push origin ${currentBranch}`, { cwd: repoPath });
-                    console.log(`[SYNTROPY] 🚀 Pushed ${repoName}`);
-                    return true;
-                }
-                catch (pushError) {
-                    // If push still fails, force-reset to remote
-                    console.warn(`[SYNTROPY] ⚠️ Push failed for ${repoName}: ${pushError.message}. Resetting to remote.`);
-                    await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
-                    return false;
-                }
-            }
-            catch (error) {
-                console.error(`[SYNTROPY] Error processing ${repoName}: ${error.message}`);
-                return false;
-            }
-        };
-        // PROCESS SUBMODULES
+        // Step 1: Push each submodule first
         for (const submodule of submodules) {
-            await handleRepoSync(path.resolve(PIXEL_ROOT, submodule), true);
+            const repo = path.resolve(PIXEL_ROOT, submodule);
+            if (!fs.existsSync(repo))
+                continue;
+            try {
+                if (!fs.existsSync(path.join(repo, '.git')))
+                    continue;
+                // Mark directory as safe
+                await execAsync(`git config --global --add safe.directory ${repo}`, { cwd: repo }).catch(() => { });
+                // Configure credential helper if token available
+                if (ghToken) {
+                    await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: repo }).catch(() => { });
+                }
+                await execAsync('git add .', { cwd: repo });
+                // Generate smart commit message
+                const commitMsg = await generateCommitMessage(repo, true);
+                try {
+                    await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: repo });
+                    console.log(`[SYNTROPY] Committed changes in ${submodule}: ${commitMsg}`);
+                }
+                catch (e) {
+                    // No changes to commit
+                }
+                try {
+                    const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
+                    await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
+                    console.log(`[SYNTROPY] Pushed ${submodule}`);
+                }
+                catch (e) {
+                    console.warn(`[SYNTROPY] Push failed for ${submodule}: ${e.message}`);
+                }
+            }
+            catch (e) {
+                // Ignore general git errors
+            }
         }
-        // PROCESS ROOT
-        // For root, we need to handle the updated submodule pointers!
-        await configureGit(PIXEL_ROOT);
-        // Explicitly add submodules to stage their pointer updates
-        for (const sub of submodules) {
-            await execAsync(`git add ${sub}`, { cwd: PIXEL_ROOT }).catch(() => { });
+        // Step 2: Update parent repo with new submodule pointers
+        try {
+            await execAsync(`git config --global --add safe.directory ${PIXEL_ROOT}`, { cwd: PIXEL_ROOT }).catch(() => { });
+            if (ghToken) {
+                await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: PIXEL_ROOT }).catch(() => { });
+            }
+            // Stage submodule pointer updates
+            for (const submodule of submodules) {
+                await execAsync(`git add ${submodule}`, { cwd: PIXEL_ROOT }).catch(() => { });
+            }
+            // Also add any other changes in parent repo
+            await execAsync('git add .', { cwd: PIXEL_ROOT });
+            // Generate smart commit message for parent
+            const parentCommitMsg = await generateCommitMessage(PIXEL_ROOT, false);
+            try {
+                await execAsync(`git commit -m "${parentCommitMsg.replace(/"/g, '\\"')}"`, { cwd: PIXEL_ROOT });
+                console.log(`[SYNTROPY] Committed in parent: ${parentCommitMsg}`);
+            }
+            catch (e) {
+                // No changes
+            }
+            try {
+                const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: PIXEL_ROOT });
+                await execAsync(`git push origin ${branch.trim()}`, { cwd: PIXEL_ROOT });
+                console.log('[SYNTROPY] Pushed parent repo');
+            }
+            catch (e) {
+                console.warn(`[SYNTROPY] Push failed for parent: ${e.message}`);
+            }
         }
-        await handleRepoSync(PIXEL_ROOT, false);
-        console.log('[SYNTROPY] Ecosystem Sync Complete.');
+        catch (e) {
+            // Parent sync error
+        }
+        console.log('[SYNTROPY] Sync complete.');
         return true;
     }
     catch (error) {
-        console.error('[SYNTROPY] Sync Fatal Error:', error.message);
+        console.error('[SYNTROPY] Sync failed:', error.message);
         return false;
     }
 };

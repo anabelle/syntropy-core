@@ -213,8 +213,29 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
     console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
   }
 
-  // 1. Enforce single-worker-at-a-time
+  // 0. Spawn cooldown: Prevent rapid respawn cascades after failures
+  //    Check if last task completed within SPAWN_COOLDOWN_MS
+  const SPAWN_COOLDOWN_MS = 60_000; // 60 seconds between spawns
   const ledger = await readTaskLedger();
+  const recentTasks = ledger.tasks
+    .filter(t => t.completedAt)
+    .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime());
+  
+  if (recentTasks.length > 0) {
+    const lastCompleted = new Date(recentTasks[0].completedAt!).getTime();
+    const elapsed = Date.now() - lastCompleted;
+    if (elapsed < SPAWN_COOLDOWN_MS) {
+      const waitSec = Math.ceil((SPAWN_COOLDOWN_MS - elapsed) / 1000);
+      await logAudit({ type: 'worker_spawn_rejected', reason: 'cooldown', waitSeconds: waitSec, lastTaskId: recentTasks[0].id });
+      return {
+        error: `Spawn cooldown active. Last task completed ${Math.floor(elapsed / 1000)}s ago. Wait ${waitSec}s before spawning another worker.`,
+        runningTaskId: recentTasks[0].id,
+        runningTaskStatus: recentTasks[0].status,
+      };
+    }
+  }
+
+  // 1. Enforce single-worker-at-a-time
   const lockTaskId = crypto.randomUUID();
   const lock = await acquireWorkerLock(lockTaskId);
   if (!lock.acquired) {

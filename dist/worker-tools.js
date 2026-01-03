@@ -137,8 +137,27 @@ export async function spawnWorkerInternal(params) {
     if (cleanup.attempted > 0) {
         console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
     }
-    // 1. Enforce single-worker-at-a-time
+    // 0. Spawn cooldown: Prevent rapid respawn cascades after failures
+    //    Check if last task completed within SPAWN_COOLDOWN_MS
+    const SPAWN_COOLDOWN_MS = 60_000; // 60 seconds between spawns
     const ledger = await readTaskLedger();
+    const recentTasks = ledger.tasks
+        .filter(t => t.completedAt)
+        .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+    if (recentTasks.length > 0) {
+        const lastCompleted = new Date(recentTasks[0].completedAt).getTime();
+        const elapsed = Date.now() - lastCompleted;
+        if (elapsed < SPAWN_COOLDOWN_MS) {
+            const waitSec = Math.ceil((SPAWN_COOLDOWN_MS - elapsed) / 1000);
+            await logAudit({ type: 'worker_spawn_rejected', reason: 'cooldown', waitSeconds: waitSec, lastTaskId: recentTasks[0].id });
+            return {
+                error: `Spawn cooldown active. Last task completed ${Math.floor(elapsed / 1000)}s ago. Wait ${waitSec}s before spawning another worker.`,
+                runningTaskId: recentTasks[0].id,
+                runningTaskStatus: recentTasks[0].status,
+            };
+        }
+    }
+    // 1. Enforce single-worker-at-a-time
     const lockTaskId = crypto.randomUUID();
     const lock = await acquireWorkerLock(lockTaskId);
     if (!lock.acquired) {
@@ -170,20 +189,18 @@ export async function spawnWorkerInternal(params) {
     const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
     console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
     // HOST_PIXEL_ROOT is the absolute host path where /pixel is mounted.
-    // Docker compose needs --project-directory to resolve volume paths correctly
-    // when running from inside a container via the docker socket.
+    // Docker compose needs this because relative paths (.) resolve to the
+    // container's PWD when running via docker socket, not the host's real path.
     const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
     const proc = spawn('docker', [
-        'compose',
-        '--project-directory', hostPixelRoot, // CRITICAL: Use host path, not container path
-        '--profile', 'worker',
+        'compose', '--profile', 'worker',
         'run', '-d',
         '--name', containerName,
         // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
         '-e', `TASK_ID=${taskId}`,
         '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
         'worker'
-    ], { cwd: hostPixelRoot }); // Also set cwd to host path for consistency
+    ], { cwd: PIXEL_ROOT });
     let spawnOutput = '';
     let spawnError = '';
     proc.stdout.on('data', (d) => { spawnOutput += d.toString(); });
@@ -410,16 +427,14 @@ The new Syntropy will read CONTINUITY.md to restore context.
         }
         const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
         const proc = spawn('docker', [
-            'compose',
-            '--project-directory', hostPixelRoot, // CRITICAL: Use host path for volume resolution
-            '--profile', 'worker',
+            'compose', '--profile', 'worker',
             'run', '-d',
             '--name', containerName,
             // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
             '-e', `TASK_ID=${taskId}`,
             '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
             'worker'
-        ], { cwd: hostPixelRoot });
+        ], { cwd: PIXEL_ROOT });
         let spawnError = '';
         proc.stderr.on('data', (d) => { spawnError += d.toString(); });
         const spawnResult = await new Promise((resolve) => {
