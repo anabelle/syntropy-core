@@ -239,12 +239,15 @@
 - **Research**: Can spawn worker with `webfetch` to research external sources
 - **Human Participation**: Edit IDEAS.md directly, add `[Human]` lines
 
-### Research Worker (NEW)
+### Research Worker (NEW) 🔍
 - **Tool**: `spawnResearchWorker` with query, context, depth (quick/thorough)
-- **Capabilities**: Web Search + webfetch + codebase access
-- **Use Cases**: Best practices research, technical solutions, competitor analysis
+- **FULL WEB ACCESS**: Search + Fetch + APIs + Real-time data + Scraping
+- **Verified Examples**:
+  - Got live Bitcoin price ($87,920-$90,638 USD)
+  - Searched arXiv for AI papers
+  - Fetched Hacker News headlines
+- **Use Cases**: Best practices, tech docs, competitor analysis, error solutions
 - **Output**: Results written to `/pixel/data/research-{timestamp}.md`
-- **Note**: Workers have full Opencode Search tool - can search, not just fetch URLs
 
 ---
 

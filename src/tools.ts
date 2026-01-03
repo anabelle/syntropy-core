@@ -1648,22 +1648,30 @@ ${content}
   // ============================================
 
   spawnResearchWorker: tool({
-    description: `Spawn a research worker to search the web and gather information.
+    description: `Spawn a research worker with FULL WEB ACCESS to search, fetch, and gather information.
 
-The worker has access to:
-- Web Search (can search for topics, not just fetch URLs)
-- webfetch (can read and summarize web pages)
-- Full codebase access (can correlate findings with existing code)
+CAPABILITIES (verified working):
+- Web Search: Can search Google/Bing for any topic (tested: found arXiv papers, GitHub repos)
+- Fetch URLs: Can read any public webpage, API endpoint, or documentation
+- Real-time Data: Can get current prices (BTC, stocks), weather, news headlines
+- API Access: Can call public REST APIs and parse JSON responses
+- Scraping: Can extract structured data from HTML pages
+- Codebase: Can correlate findings with your existing code
 
-USE CASES:
-- Research best practices before implementing a feature
-- Find solutions to technical problems
-- Investigate competitor approaches
-- Gather context for Idea Garden seeds
-- Learn about new technologies or patterns
-- Find documentation for dependencies
+EXAMPLES OF WHAT IT CAN DO:
+- "What is the current Bitcoin price?" → Searches and returns live price
+- "Research autonomous AI agent architectures" → Finds papers, summarizes approaches
+- "How do other projects implement X?" → Competitor analysis
+- "What does the API documentation say about Y?" → Fetches and summarizes docs
+- "What are the best practices for Z in 2024?" → Searches, reads articles, synthesizes
 
-The worker runs autonomously and writes findings. Check status with checkWorkerStatus.`,
+USE THIS WHEN:
+- You need external knowledge to solve a problem
+- You want to validate an approach before implementing
+- An Idea Garden seed needs research
+- You encounter an error and want to find solutions online
+
+The worker runs autonomously and writes findings to a file. Check status with checkWorkerStatus.`,
 
     inputSchema: z.object({
       query: z.string().describe('What to research. Be specific about what you want to learn.'),
