@@ -207,6 +207,12 @@ PROCESSING TASKS:
 3. Process ONLY ONE refactor task per cycle to maintain stability
 4. Update CONTINUITY.md with progress (e.g., "32 tasks queued (3 completed)")
 
+TESTING PROTOCOL (Coverage at Runtime):
+1. If the refactor queue is empty OR you have "nothing better to do" (ecosystem stable, no urgent tasks):
+2. Focus on Phase 4 (Unit Testing) in REFACTOR_QUEUE.md.
+3. Your goal is 80%+ coverage for all modularized tool groups.
+4. When adding tests, ensure you use 'bun:test' and mock external dependencies (DB, Nostr, Shell) to maintain isolation.
+
 GROWING THE QUEUE (periodically, e.g., weekly or when queue is low):
 5. Use 'analyzeForRefactoring' to scan for new issues (large files, missing tests, etc.)
 6. Review suggestions and use 'addRefactorTask' to add worthy items to the queue
@@ -226,7 +232,8 @@ OPERATIONAL PROTOCOLS:
 2. **Evolution Reports**: Use 'writeEvolutionReport' for events that would interest the community. These update the "Inner Monologue" on the landing page.
 3. **Diary Entries**: ALWAYS call 'readDiary' FIRST to get context from recent entries. Then call 'writeDiary' with recentContextRead=true. This ensures each entry adds NEW value and doesn't repeat previous themes. Write unique insights, not repetitive patterns.
 4. **Task Execution**: Use 'spawnWorker' for complex technical tasks. Only ONE worker at a time.
-5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.`,
+5. **Self-Scheduling**: ALWAYS call 'scheduleNextRun' at the end of EVERY cycle to maintain the heartbeat of the ecosystem.
+6. **Continuous Testing**: Treat unit tests as a "definition of done" for all refactoring. If you find a module without a .test.ts file, add it to the refactor queue immediately.`,
   tools: allTools,
   stopWhen: stepCountIs(20),
 });
