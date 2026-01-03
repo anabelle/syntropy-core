@@ -79,13 +79,24 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
         if (branch.startsWith('conflict/')) {
           console.warn(`[SYNTROPY] 🚨 DETECTED STUCK CONFLICT BRANCH: ${branch} in ${repoName}`);
 
-          // Try to determine target branch (main or master) by parsing actual list
-          const { stdout: branchesRaw } = await execAsync('git branch --format="%(refname:short)"', { cwd: repoPath });
-          const branches = branchesRaw.split('\n').map(b => b.trim());
-          const target = branches.includes('main') ? 'main' : 'master';
+          // Get the default branch from remote
+          let target = 'master'; // fallback
+          try {
+            const { stdout: remoteInfo } = await execAsync('git remote show origin', { cwd: repoPath });
+            const headMatch = remoteInfo.match(/HEAD branch:\s*(\S+)/);
+            if (headMatch) {
+              target = headMatch[1];
+            }
+          } catch (e) {
+            // Fallback: check if main or master exists
+            const { stdout: branchesRaw } = await execAsync('git branch --format="%(refname:short)"', { cwd: repoPath });
+            const branches = branchesRaw.split('\n').map(b => b.trim());
+            target = branches.includes('main') ? 'main' : 'master';
+          }
 
           console.log(`[SYNTROPY] 🚑 Self-healing: Force switching back to ${target}...`);
           await execAsync(`git checkout -f ${target}`, { cwd: repoPath });
+          await execAsync(`git reset --hard origin/${target}`, { cwd: repoPath }).catch(() => { });
           console.log(`[SYNTROPY] ✅ Restored ${repoName} to ${target}`);
         }
       } catch (e: any) {
@@ -105,7 +116,14 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
       await configureGit(repoPath);
 
       try {
-        // 1. STAGE & COMMIT LOCAL CHANGES
+        // Detect current branch first
+        const { stdout: currentBranchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
+        const currentBranch = currentBranchRaw.trim();
+
+        // 1. FETCH REMOTE to see what's ahead
+        await execAsync(`git fetch origin ${currentBranch}`, { cwd: repoPath });
+
+        // 2. STAGE & COMMIT LOCAL CHANGES
         await execAsync('git add .', { cwd: repoPath });
 
         // Generate message
@@ -136,39 +154,29 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
           }
         }
 
-        // Detect current branch
-        const { stdout: currentBranchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
-        const currentBranch = currentBranchRaw.trim();
-
-        // 2. PULL & REBASE (Bidirectional Sync)
-        // We try to pull changes from remote before pushing to avoid non-fast-forward errors
+        // 3. REBASE onto remote to maintain linear history
+        // This is the key change: instead of creating conflict branches, we rebase
         try {
-          console.log(`[SYNTROPY] ⬇️  Pulling latest for ${repoName} (${currentBranch})...`);
-          await execAsync(`git pull --rebase --autostash origin ${currentBranch}`, { cwd: repoPath });
-        } catch (pullError: any) {
-          console.warn(`[SYNTROPY] ⚠️ Conflict detected during pull in ${repoName}.`);
-          // Strategy: Create a conflict branch and push that instead of breaking local state
-          const conflictBranch = `conflict/${repoName}-${Date.now()}`;
-          await execAsync(`git checkout -b ${conflictBranch}`, { cwd: repoPath });
-          await execAsync('git commit -am "chore: conflict resolution save point"', { cwd: repoPath }).catch(() => { });
-          await execAsync(`git push -u origin ${conflictBranch}`, { cwd: repoPath });
-          console.warn(`[SYNTROPY] 🚨 Created conflict branch: ${conflictBranch}. Resetting ${currentBranch} to origin.`);
-
-          // Hard reset primary branch to origin to get back in sync
-          await execAsync(`git checkout -f ${currentBranch}`, { cwd: repoPath });
-          await execAsync('git fetch origin', { cwd: repoPath });
+          console.log(`[SYNTROPY] ⬇️  Rebasing ${repoName} onto origin/${currentBranch}...`);
+          await execAsync(`git rebase origin/${currentBranch}`, { cwd: repoPath });
+        } catch (rebaseError: any) {
+          console.warn(`[SYNTROPY] ⚠️ Rebase conflict in ${repoName}. Aborting and resetting to remote.`);
+          // Abort the rebase and reset to remote - remote is source of truth
+          await execAsync('git rebase --abort', { cwd: repoPath }).catch(() => { });
           await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
-          return false; // Stop processing this repo for now
+          console.warn(`[SYNTROPY] 🔄 Reset ${repoName} to origin/${currentBranch}. Local changes were discarded.`);
+          return false;
         }
 
-        // 3. PUSH
+        // 4. PUSH (should always be fast-forward now)
         try {
-          const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath });
-          await execAsync(`git push origin ${branch.trim()}`, { cwd: repoPath });
+          await execAsync(`git push origin ${currentBranch}`, { cwd: repoPath });
           console.log(`[SYNTROPY] 🚀 Pushed ${repoName}`);
           return true;
         } catch (pushError: any) {
-          console.error(`[SYNTROPY] ❌ Push failed for ${repoName}: ${pushError.message}`);
+          // If push still fails, force-reset to remote
+          console.warn(`[SYNTROPY] ⚠️ Push failed for ${repoName}: ${pushError.message}. Resetting to remote.`);
+          await execAsync(`git reset --hard origin/${currentBranch}`, { cwd: repoPath });
           return false;
         }
 
