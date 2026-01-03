@@ -12,41 +12,9 @@ const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 const CONTINUITY_PATH = isDocker
     ? path.resolve(PIXEL_ROOT, 'CONTINUITY.md')
     : path.resolve(PIXEL_ROOT, 'syntropy-core/CONTINUITY.md');
+import { continuityTools } from './tools/continuity';
 export const tools = {
-    readContinuity: tool({
-        description: 'Read the Continuity Ledger. This is the canonical session briefing designed to survive context compaction.',
-        inputSchema: z.object({}),
-        execute: async () => {
-            console.log('[SYNTROPY] Tool: readContinuity');
-            try {
-                if (!fs.existsSync(CONTINUITY_PATH))
-                    return "Continuity Ledger not found.";
-                const content = await fs.readFile(CONTINUITY_PATH, 'utf-8');
-                await logAudit({ type: 'continuity_read', content });
-                return content;
-            }
-            catch (error) {
-                return { error: error.message };
-            }
-        }
-    }),
-    updateContinuity: tool({
-        description: 'Update the Continuity Ledger. Use this whenever the goal, constraints, key decisions, or progress state change.',
-        inputSchema: z.object({
-            content: z.string().describe('The full updated content of CONTINUITY.md. Maintain the standard headings.')
-        }),
-        execute: async ({ content }) => {
-            console.log('[SYNTROPY] Tool: updateContinuity');
-            try {
-                await fs.writeFile(CONTINUITY_PATH, content);
-                await logAudit({ type: 'continuity_update', content });
-                return { success: true };
-            }
-            catch (error) {
-                return { error: error.message };
-            }
-        }
-    }),
+    ...continuityTools,
     getEcosystemStatus: tool({
         description: 'Get status of all containers in the ecosystem via Docker',
         inputSchema: z.object({
