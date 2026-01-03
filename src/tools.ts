@@ -447,6 +447,30 @@ IMPORTANT:
     }
   }),
 
+  postToNostr: tool({
+    description: 'Post a message to the Nostr network via the Pixel Agent bridge. Use this for high-level ecosystem announcements, status updates, or to communicate with the Nostr community.',
+    inputSchema: z.object({
+      text: z.string().describe('The message content to post. Keep it relevant and concise.')
+    }),
+    execute: async ({ text }) => {
+      console.log(`[SYNTROPY] Tool: postToNostr`);
+      try {
+        const bridgeFile = path.resolve(PIXEL_ROOT, 'data/eliza/nostr_bridge.jsonl');
+        const payload = JSON.stringify({ text, timestamp: Date.now(), source: 'syntropy' });
+
+        // Append to the bridge file (the agent consumes it)
+        await fs.appendFile(bridgeFile, payload + '\n');
+
+        await logAudit({ type: 'nostr_bridge_post', text });
+        return { success: true, message: "Post request sent to agent bridge." };
+      } catch (error: any) {
+        await logAudit({ type: 'nostr_bridge_error', error: error.message });
+        return { error: `Failed to signal agent bridge: ${error.message}` };
+      }
+    }
+  }),
+
+
   readPixelMemories: tool({
     description: `Read Pixel's memories from the PostgreSQL database.
 The agent stores all narrative data in PostgreSQL with different content types:

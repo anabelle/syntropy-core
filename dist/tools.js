@@ -442,6 +442,27 @@ IMPORTANT:
             }
         }
     }),
+    postToNostr: tool({
+        description: 'Post a message to the Nostr network via the Pixel Agent bridge. Use this for high-level ecosystem announcements, status updates, or to communicate with the Nostr community.',
+        inputSchema: z.object({
+            text: z.string().describe('The message content to post. Keep it relevant and concise.')
+        }),
+        execute: async ({ text }) => {
+            console.log(`[SYNTROPY] Tool: postToNostr`);
+            try {
+                const bridgeFile = path.resolve(PIXEL_ROOT, 'data/eliza/nostr_bridge.jsonl');
+                const payload = JSON.stringify({ text, timestamp: Date.now(), source: 'syntropy' });
+                // Append to the bridge file (the agent consumes it)
+                await fs.appendFile(bridgeFile, payload + '\n');
+                await logAudit({ type: 'nostr_bridge_post', text });
+                return { success: true, message: "Post request sent to agent bridge." };
+            }
+            catch (error) {
+                await logAudit({ type: 'nostr_bridge_error', error: error.message });
+                return { error: `Failed to signal agent bridge: ${error.message}` };
+            }
+        }
+    }),
     readPixelMemories: tool({
         description: `Read Pixel's memories from the PostgreSQL database.
 The agent stores all narrative data in PostgreSQL with different content types:
@@ -862,6 +883,10 @@ to monitor progress after execution starts.`,
 ${instructions}
 
 After completing the task:
+0. Analyze possible side effects and ensure no regressions
+0.1 Run existing tests to confirm nothing is broken
+0.2 Review code quality and maintainability improvements
+0.3 Update all related documentation if applicable
 1. Run the verification command if provided
 2. Update REFACTOR_QUEUE.md to mark the task as ✅ DONE or ❌ FAILED
 3. Update the "Last Processed" timestamp
@@ -1114,39 +1139,27 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
         }
     }),
     readDiary: tool({
-        description: 'Read diary entries from Pixel agent. Use this to access reflections, notes, and evolutionary insights.',
+        description: 'Read diary entries from the Pixel agent database. Use this to access reflections, notes, and evolutionary insights.',
         inputSchema: z.object({
             limit: z.number().optional().describe('Maximum number of entries to return (default: 10)'),
             author: z.string().optional().describe('Filter by author (e.g., "Pixel", "Syntropy")'),
             since: z.string().optional().describe('ISO date string to filter entries created after (e.g., "2025-01-01T00:00:00Z")')
         }),
-        execute: async ({ limit, author, since }) => {
-            console.log(`[SYNTROPY] Tool: readDiary (limit=${limit || 10}, author=${author || 'any'}, since=${since || 'any'})`);
+        execute: async ({ limit = 10, author, since }) => {
+            console.log(`[SYNTROPY] Tool: readDiary (limit=${limit}, author=${author || 'any'}, since=${since || 'any'})`);
             try {
-                const query = 'SELECT * FROM diary_entries';
                 const conditions = [];
-                const values = [];
-                if (author) {
-                    conditions.push(`author = $${values.length + 1}`);
-                    values.push(author);
-                }
-                if (since) {
-                    conditions.push(`created_at >= $${values.length + 1}`);
-                    values.push(since);
-                }
+                if (author)
+                    conditions.push(`author = '${author.replace(/'/g, "''")}'`);
+                if (since)
+                    conditions.push(`created_at >= '${since}'`);
                 const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-                const limitClause = limit ? ` LIMIT ${limit}` : '';
-                const orderBy = ' ORDER BY created_at DESC';
-                const fullQuery = `${query}${whereClause}${orderBy}${limitClause}`;
-                const script = `
-const { PGlite } = require('@electric-sql/pglite');
-const db = new PGlite('/app/.eliza/.elizadb');
-db.query(\`${fullQuery.replace(/'/g, "\\'").replace(/\$/g, '\\$')}\`, ${JSON.stringify(values)})
-  .then(r => console.log(JSON.stringify(r.rows)))
-  .catch(e => console.error('ERROR:', e.message));
-        `;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
-                if (stderr && stderr.includes('ERROR:')) {
+                const limitClause = ` LIMIT ${limit}`;
+                const query = `SELECT id, author, content, tags, created_at, updated_at FROM diary_entries${whereClause} ORDER BY created_at DESC${limitClause}`;
+                // Format as JSON using PostgreSQL
+                const jsonQuery = `SELECT COALESCE(json_agg(t), '[]'::json) FROM (${query}) t`;
+                const { stdout, stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -t -c "${jsonQuery.replace(/"/g, '\\"')}"`, { timeout: 15000 });
+                if (stderr && stderr.toLowerCase().includes('error')) {
                     return { error: stderr };
                 }
                 const entries = JSON.parse(stdout.trim());
@@ -1169,44 +1182,38 @@ db.query(\`${fullQuery.replace(/'/g, "\\'").replace(/\$/g, '\\$')}\`, ${JSON.str
         }
     }),
     writeDiary: tool({
-        description: 'Write a new diary entry. Use this to record insights, learnings, or evolutionary steps.',
+        description: 'Write a new diary entry to the persistent repository. Use this to record high-value insights, evolutionary milestones, or narrative shifts.',
         inputSchema: z.object({
             author: z.string().describe('Author name (e.g., "Syntropy", "Pixel")'),
             content: z.string().describe('Diary entry content'),
-            tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight"])')
+            tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["learning", "insight", "crisis-resolved"])')
         }),
         execute: async ({ author, content, tags = [] }) => {
             console.log(`[SYNTROPY] Tool: writeDiary (author=${author}, tags=${tags.join(',')})`);
             try {
-                const script = `
-const { PGlite } = require('@electric-sql/pglite');
-const db = new PGlite('/app/.eliza/.elizadb');
-const id = crypto.randomUUID();
-const now = new Date().toISOString();
-db.query(
-  \`INSERT INTO diary_entries (id, author, content, tags, created_at, updated_at) VALUES ('\${id}', '\${author}', '\${content}', '\${JSON.stringify(tags)}'::text[], '\${now}', '\${now}')\`
-)
-  .then(() => console.log(JSON.stringify({ id, success: true })))
-  .catch(e => console.error('ERROR:', e.message));
-        `;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 15000 });
-                if (stderr && stderr.includes('ERROR:')) {
+                const id = crypto.randomUUID();
+                const escapedContent = content.replace(/'/g, "''");
+                const tagsArray = tags.length > 0
+                    ? `ARRAY[${tags.map(t => `'${t.replace(/'/g, "''")}'`).join(',')}]`
+                    : "'{}'::text[]";
+                const query = `INSERT INTO diary_entries (id, author, content, tags, created_at, updated_at) VALUES ('${id}', '${author.replace(/'/g, "''")}', '${escapedContent}', ${tagsArray}, NOW(), NOW())`;
+                const { stderr } = await execAsync(`docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -c "${query.replace(/"/g, '\\"')}"`, { timeout: 15000 });
+                if (stderr && stderr.toLowerCase().includes('error')) {
                     return { error: stderr };
                 }
-                const result = JSON.parse(stdout.trim());
                 await logAudit({
                     type: 'diary_write',
                     author,
                     tags,
-                    entryId: result.id,
+                    entryId: id,
                     success: true
                 });
                 return {
                     success: true,
-                    id: result.id,
+                    id,
                     author,
-                    content,
-                    tags
+                    tags,
+                    message: 'Diary entry persisted to PostgreSQL successfully'
                 };
             }
             catch (error) {
