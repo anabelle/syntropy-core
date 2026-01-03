@@ -1492,6 +1492,402 @@ ${content}
             }
         }
     }),
+    // ============================================
+    // RESEARCH WORKER - Web Search & Knowledge Gathering
+    // ============================================
+    spawnResearchWorker: tool({
+        description: `Spawn a research worker to search the web and gather information.
+
+The worker has access to:
+- Web Search (can search for topics, not just fetch URLs)
+- webfetch (can read and summarize web pages)
+- Full codebase access (can correlate findings with existing code)
+
+USE CASES:
+- Research best practices before implementing a feature
+- Find solutions to technical problems
+- Investigate competitor approaches
+- Gather context for Idea Garden seeds
+- Learn about new technologies or patterns
+- Find documentation for dependencies
+
+The worker runs autonomously and writes findings. Check status with checkWorkerStatus.`,
+        inputSchema: z.object({
+            query: z.string().describe('What to research. Be specific about what you want to learn.'),
+            context: z.string().optional().describe('Why you need this research (helps focus the search)'),
+            outputFile: z.string().optional().describe('Where to save results (default: /pixel/data/research-{timestamp}.md)'),
+            depth: z.enum(['quick', 'thorough']).default('quick').describe('quick=2-3 sources, thorough=5+ sources with deeper analysis')
+        }),
+        execute: async ({ query, context, outputFile, depth }) => {
+            console.log(`[SYNTROPY] Tool: spawnResearchWorker (query="${query.slice(0, 50)}...", depth=${depth})`);
+            const { spawnWorkerInternal } = await import('./worker-tools');
+            const timestamp = Date.now();
+            const defaultOutput = `/pixel/data/research-${timestamp}.md`;
+            const targetFile = outputFile || defaultOutput;
+            const depthInstructions = depth === 'thorough'
+                ? `Find at least 5 relevant sources. For each source:
+1. Search for the topic using web search
+2. Fetch and read the top results
+3. Extract key insights and quotes
+4. Cross-reference findings across sources
+5. Identify patterns and best practices`
+                : `Find 2-3 relevant sources quickly. For each:
+1. Search for the topic
+2. Fetch top 2 results
+3. Summarize key points`;
+            const researchTask = `RESEARCH TASK
+==============
+
+QUERY: ${query}
+${context ? `CONTEXT: ${context}` : ''}
+DEPTH: ${depth}
+
+INSTRUCTIONS:
+${depthInstructions}
+
+OUTPUT FORMAT:
+Write your findings to ${targetFile} in this format:
+
+# Research: ${query}
+> Generated: ${new Date().toISOString()}
+> Depth: ${depth}
+
+## Sources
+- [Source Title](url): One-line summary
+
+## Key Findings
+1. Finding with supporting evidence
+2. Finding with supporting evidence
+
+## Recommendations
+- Actionable recommendation based on research
+
+## Raw Notes
+[Any additional context or quotes worth preserving]
+
+---
+END OF RESEARCH TASK
+
+After writing the file, confirm it was saved successfully.`;
+            const result = await spawnWorkerInternal({
+                task: researchTask,
+                context: `Web research task. Use the Search tool to find information, then webfetch to read pages. ${context || ''}`,
+                priority: 'normal'
+            });
+            if ('error' in result) {
+                await logAudit({ type: 'research_worker_error', query, error: result.error });
+                return { error: result.error };
+            }
+            await logAudit({ type: 'research_worker_spawned', query, taskId: result.taskId, outputFile: targetFile });
+            return {
+                success: true,
+                taskId: result.taskId,
+                outputFile: targetFile,
+                message: `Research worker spawned. Query: "${query.slice(0, 50)}...". Check status with checkWorkerStatus("${result.taskId}"). Results will be written to ${targetFile}.`
+            };
+        }
+    }),
+    // ============================================
+    // IDEA GARDEN - Brainstorming & Creativity
+    // ============================================
+    tendIdeaGarden: tool({
+        description: `Tend the Idea Garden (IDEAS.md). Use at the END of each cycle to nurture creative ideas.
+
+Actions:
+- 'read': View all current seeds with their watering counts
+- 'plant': Add a new seed from this cycle's observations (max 1 per cycle)
+- 'water': Add a thought to an existing seed (exactly 1 per cycle)
+- 'harvest': Move a mature idea (5+ waterings) to CONTINUITY.md pending tasks
+- 'compost': Archive a stale or failed idea
+- 'research': Spawn a worker to research external sources for a seed
+
+Rules:
+- Water ONE existing seed per cycle (if any exist)
+- Plant at most ONE new seed per cycle
+- Harvest requires 5+ waterings AND clear implementation path
+- Research spawns a worker with webfetch capability
+
+The garden enables ideas to mature over multiple cycles before becoming tasks.`,
+        inputSchema: z.object({
+            action: z.enum(['read', 'plant', 'water', 'harvest', 'compost', 'research']).describe('Action to perform'),
+            seedTitle: z.string().optional().describe('Title of the seed (required for water/harvest/compost/research)'),
+            content: z.string().optional().describe('For plant: the idea origin. For water: new thought. For harvest: task description. For research: research query.'),
+            author: z.enum(['Syntropy', 'Human']).default('Syntropy').describe('Who is tending the garden')
+        }),
+        execute: async ({ action, seedTitle, content, author }) => {
+            console.log(`[SYNTROPY] Tool: tendIdeaGarden (action=${action}, seed=${seedTitle || 'N/A'})`);
+            const IDEAS_PATH = isDocker
+                ? path.resolve(PIXEL_ROOT, 'IDEAS.md')
+                : path.resolve(PIXEL_ROOT, 'syntropy-core/IDEAS.md');
+            try {
+                // Read or initialize garden
+                let garden = '';
+                if (await fs.pathExists(IDEAS_PATH)) {
+                    garden = await fs.readFile(IDEAS_PATH, 'utf-8');
+                }
+                else {
+                    garden = `# 🌱 Idea Garden
+
+> Persistent workspace for incubating ideas.
+
+## 🌱 Seeds (0-2 waterings)
+
+## 🌿 Sprouting (3-4 waterings)
+
+## 🌸 Ready to Harvest (5+ waterings)
+
+## 🍂 Compost
+`;
+                }
+                const timestamp = new Date().toISOString().split('T')[0];
+                // ============================================
+                // READ: List all seeds with watering counts
+                // ============================================
+                if (action === 'read') {
+                    const seedPattern = /### (.+)\n[\s\S]*?- \*\*Waterings\*\*: (\d+)/g;
+                    const seeds = [];
+                    // Find which section each seed is in
+                    const sections = ['Seeds', 'Sprouting', 'Ready to Harvest', 'Compost'];
+                    for (const section of sections) {
+                        const sectionPattern = new RegExp(`## [🌱🌿🌸🍂] ${section}[^#]*`, 'g');
+                        const sectionMatch = garden.match(sectionPattern);
+                        if (sectionMatch) {
+                            let match;
+                            const sectionContent = sectionMatch[0];
+                            const localPattern = /### (.+)\n[\s\S]*?- \*\*Waterings\*\*: (\d+)/g;
+                            while ((match = localPattern.exec(sectionContent)) !== null) {
+                                seeds.push({
+                                    title: match[1].trim(),
+                                    waterings: parseInt(match[2]),
+                                    section
+                                });
+                            }
+                        }
+                    }
+                    // Check for human edits (lines with [Human] that Syntropy hasn't responded to)
+                    const humanEdits = garden.match(/- \[[\d-]+ Human\] .+/g) || [];
+                    await logAudit({ type: 'idea_garden_read', seedCount: seeds.length });
+                    return {
+                        seeds,
+                        total: seeds.length,
+                        humanEdits: humanEdits.length,
+                        hint: seeds.length === 0
+                            ? "Garden is empty. Use action='plant' to add a seed."
+                            : humanEdits.length > 0
+                                ? `Found ${humanEdits.length} human contribution(s). Acknowledge and water those seeds.`
+                                : `Water one seed with action='water'.`
+                    };
+                }
+                // ============================================
+                // PLANT: Add a new seed
+                // ============================================
+                if (action === 'plant') {
+                    if (!seedTitle || !content) {
+                        return { error: "Both 'seedTitle' and 'content' (origin) are required for planting" };
+                    }
+                    const newSeed = `
+### ${seedTitle}
+- **Planted**: ${timestamp} by ${author}
+- **Origin**: ${content}
+- **Waterings**: 0
+- **Log**:
+`;
+                    // Insert after "## 🌱 Seeds" header
+                    garden = garden.replace(/## 🌱 Seeds \(0-2 waterings\)\n/, `## 🌱 Seeds (0-2 waterings)\n${newSeed}`);
+                    await fs.writeFile(IDEAS_PATH, garden);
+                    await logAudit({ type: 'idea_garden_plant', seedTitle, author });
+                    return { success: true, action: 'planted', seedTitle, message: `Seed "${seedTitle}" planted in the garden.` };
+                }
+                // ============================================
+                // WATER: Add thought to existing seed
+                // ============================================
+                if (action === 'water') {
+                    if (!seedTitle || !content) {
+                        return { error: "Both 'seedTitle' and 'content' (new thought) are required for watering" };
+                    }
+                    // Find the seed
+                    const seedRegex = new RegExp(`### ${seedTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n([\\s\\S]*?)(?=###|## 🌿|## 🌸|## 🍂|$)`);
+                    const seedMatch = garden.match(seedRegex);
+                    if (!seedMatch) {
+                        return { error: `Seed "${seedTitle}" not found in garden` };
+                    }
+                    let seedContent = seedMatch[1];
+                    // Increment watering count
+                    const wateringMatch = seedContent.match(/- \*\*Waterings\*\*: (\d+)/);
+                    const currentCount = wateringMatch ? parseInt(wateringMatch[1]) : 0;
+                    const newCount = currentCount + 1;
+                    seedContent = seedContent.replace(/- \*\*Waterings\*\*: \d+/, `- **Waterings**: ${newCount}`);
+                    // Add log entry
+                    const logEntry = `  - [${timestamp} ${author}] ${content}\n`;
+                    seedContent = seedContent.replace(/- \*\*Log\*\*:\n/, `- **Log**:\n${logEntry}`);
+                    // Update garden with new seed content
+                    garden = garden.replace(seedMatch[0], `### ${seedTitle}\n${seedContent}`);
+                    // Move to appropriate section based on watering count
+                    if (newCount >= 5) {
+                        // Move to Ready to Harvest
+                        const fullSeed = `### ${seedTitle}\n${seedContent}`;
+                        garden = garden.replace(fullSeed, '');
+                        garden = garden.replace(/## 🌸 Ready to Harvest \(5\+ waterings\)\n/, `## 🌸 Ready to Harvest (5+ waterings)\n\n${fullSeed}`);
+                    }
+                    else if (newCount >= 3) {
+                        // Move to Sprouting
+                        const fullSeed = `### ${seedTitle}\n${seedContent}`;
+                        garden = garden.replace(fullSeed, '');
+                        garden = garden.replace(/## 🌿 Sprouting \(3-4 waterings\)\n/, `## 🌿 Sprouting (3-4 waterings)\n\n${fullSeed}`);
+                    }
+                    // Clean up extra newlines
+                    garden = garden.replace(/\n{3,}/g, '\n\n');
+                    await fs.writeFile(IDEAS_PATH, garden);
+                    await logAudit({ type: 'idea_garden_water', seedTitle, newCount, author });
+                    const statusMsg = newCount >= 5
+                        ? 'READY TO HARVEST! Consider using harvest action.'
+                        : newCount >= 3
+                            ? 'Sprouting! Getting closer to actionable.'
+                            : `${5 - newCount} more waterings until harvest-ready.`;
+                    return {
+                        success: true,
+                        action: 'watered',
+                        seedTitle,
+                        newCount,
+                        status: statusMsg
+                    };
+                }
+                // ============================================
+                // HARVEST: Move to CONTINUITY.md pending tasks
+                // ============================================
+                if (action === 'harvest') {
+                    if (!seedTitle) {
+                        return { error: "'seedTitle' is required for harvesting" };
+                    }
+                    // Find the seed
+                    const seedRegex = new RegExp(`### ${seedTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n([\\s\\S]*?)(?=###|## 🌿|## 🌸|## 🍂|$)`);
+                    const seedMatch = garden.match(seedRegex);
+                    if (!seedMatch) {
+                        return { error: `Seed "${seedTitle}" not found` };
+                    }
+                    const seedContent = seedMatch[1];
+                    const wateringMatch = seedContent.match(/- \*\*Waterings\*\*: (\d+)/);
+                    const waterings = wateringMatch ? parseInt(wateringMatch[1]) : 0;
+                    if (waterings < 5) {
+                        return {
+                            error: `Seed only has ${waterings} waterings. Need 5+ for harvest.`,
+                            hint: 'Keep watering until the idea is mature.'
+                        };
+                    }
+                    // Extract the log for task description
+                    const logMatch = seedContent.match(/- \*\*Log\*\*:\n([\s\S]*)/);
+                    const logContent = logMatch ? logMatch[1].trim() : '';
+                    // Create task entry for CONTINUITY.md
+                    const taskEntry = `
+### ${seedTitle} (from Idea Garden)
+- **Origin**: Harvested from Idea Garden (${waterings} waterings)
+- **Summary**: ${content || 'See implementation notes below'}
+- **Implementation Notes**:
+${logContent.split('\n').map((l) => `  ${l}`).join('\n')}
+`;
+                    // Move seed to compost (archived)
+                    const fullSeed = `### ${seedTitle}\n${seedContent}`;
+                    garden = garden.replace(fullSeed, '');
+                    garden = garden.replace(/## 🍂 Compost\n/, `## 🍂 Compost\n\n${fullSeed.replace(/- \*\*Waterings\*\*: \d+/, '- **Waterings**: HARVESTED')}`);
+                    await fs.writeFile(IDEAS_PATH, garden);
+                    // Append to CONTINUITY.md pending tasks
+                    let continuity = await fs.readFile(CONTINUITY_PATH, 'utf-8');
+                    continuity = continuity.replace(/## 📬 Pending Tasks\n\n/, `## 📬 Pending Tasks\n${taskEntry}\n`);
+                    await fs.writeFile(CONTINUITY_PATH, continuity);
+                    await logAudit({ type: 'idea_garden_harvest', seedTitle, waterings });
+                    return {
+                        success: true,
+                        action: 'harvested',
+                        seedTitle,
+                        message: `"${seedTitle}" harvested and added to CONTINUITY.md pending tasks!`
+                    };
+                }
+                // ============================================
+                // COMPOST: Archive a failed/stale idea
+                // ============================================
+                if (action === 'compost') {
+                    if (!seedTitle) {
+                        return { error: "'seedTitle' is required for composting" };
+                    }
+                    const seedRegex = new RegExp(`### ${seedTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n([\\s\\S]*?)(?=###|## 🌿|## 🌸|## 🍂|$)`);
+                    const seedMatch = garden.match(seedRegex);
+                    if (!seedMatch) {
+                        return { error: `Seed "${seedTitle}" not found` };
+                    }
+                    const fullSeed = seedMatch[0];
+                    garden = garden.replace(fullSeed, '');
+                    // Add reason to the seed
+                    const compostNote = content ? `  - [${timestamp} ${author}] COMPOSTED: ${content}\n` : '';
+                    const updatedSeed = fullSeed.replace(/- \*\*Log\*\*:\n/, `- **Log**:\n${compostNote}`);
+                    garden = garden.replace(/## 🍂 Compost\n/, `## 🍂 Compost\n\n${updatedSeed}`);
+                    garden = garden.replace(/\n{3,}/g, '\n\n');
+                    await fs.writeFile(IDEAS_PATH, garden);
+                    await logAudit({ type: 'idea_garden_compost', seedTitle, reason: content });
+                    return {
+                        success: true,
+                        action: 'composted',
+                        seedTitle,
+                        message: `"${seedTitle}" moved to compost. Learning preserved.`
+                    };
+                }
+                // ============================================
+                // RESEARCH: Spawn worker to research external sources
+                // ============================================
+                if (action === 'research') {
+                    if (!seedTitle || !content) {
+                        return { error: "Both 'seedTitle' and 'content' (research query) are required" };
+                    }
+                    // Import spawnWorkerInternal
+                    const { spawnWorkerInternal } = await import('./worker-tools');
+                    const researchTask = `RESEARCH TASK for Idea Garden seed: "${seedTitle}"
+
+Research the topic: ${content}
+
+Use the webfetch tool to:
+1. Find 2-3 relevant articles, GitHub repos, or documentation
+2. Summarize key insights from each source
+3. Suggest implementation approaches based on findings
+
+Write your findings as a summary at the end.
+
+FORMAT YOUR RESPONSE:
+## Research: ${seedTitle}
+### Sources Found
+- [Source 1 title](url): Key insight
+- [Source 2 title](url): Key insight
+
+### Key Findings
+1. ...
+2. ...
+
+### Recommendations for Implementation
+1. ...
+`;
+                    const result = await spawnWorkerInternal({
+                        task: researchTask,
+                        context: `Research for Idea Garden seed. Use webfetch tool to access external URLs and gather information.`,
+                        priority: 'normal'
+                    });
+                    if ('error' in result) {
+                        return { error: result.error };
+                    }
+                    await logAudit({ type: 'idea_garden_research', seedTitle, taskId: result.taskId });
+                    return {
+                        success: true,
+                        action: 'research_spawned',
+                        seedTitle,
+                        taskId: result.taskId,
+                        message: `Research worker spawned for "${seedTitle}". Check status with checkWorkerStatus("${result.taskId}"). Results will inform next watering.`
+                    };
+                }
+                return { error: `Unknown action: ${action}` };
+            }
+            catch (error) {
+                await logAudit({ type: 'idea_garden_error', action, error: error.message });
+                return { error: `Idea Garden error: ${error.message}` };
+            }
+        }
+    }),
     // Worker Architecture Tools (Brain/Hands pattern)
     ...workerTools
 };

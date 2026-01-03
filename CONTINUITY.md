@@ -231,6 +231,21 @@
 - Update continuity ledger
 - All workers are ephemeral
 
+### Idea Garden Protocol (NEW)
+- **Tool**: `tendIdeaGarden` with actions: read, plant, water, harvest, compost, research
+- **File**: `/pixel/IDEAS.md` (shared workspace for Human + Syntropy)
+- **Flow**: Seeds → Water (5+ times) → Harvest (becomes task) → Compost (archive)
+- **Rules**: Water ONE seed per cycle, Plant at most ONE seed per cycle
+- **Research**: Can spawn worker with `webfetch` to research external sources
+- **Human Participation**: Edit IDEAS.md directly, add `[Human]` lines
+
+### Research Worker (NEW)
+- **Tool**: `spawnResearchWorker` with query, context, depth (quick/thorough)
+- **Capabilities**: Web Search + webfetch + codebase access
+- **Use Cases**: Best practices research, technical solutions, competitor analysis
+- **Output**: Results written to `/pixel/data/research-{timestamp}.md`
+- **Note**: Workers have full Opencode Search tool - can search, not just fetch URLs
+
 ---
 
 ## 🔄 Next Steps
