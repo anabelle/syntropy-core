@@ -1616,6 +1616,70 @@ After writing the file, confirm it was saved successfully.`;
             };
         }
     }),
+    readResearchResults: tool({
+        description: `Read completed research results from previous spawnResearchWorker calls.
+
+Lists available research files and can read their contents.
+Use this to:
+- Check what research has been completed
+- Get insights from previous research to inform decisions
+- Continue researching based on findings
+
+Call with action='list' to see available research, then action='read' with a filename.`,
+        inputSchema: z.object({
+            action: z.enum(['list', 'read']).describe("'list' to see available, 'read' to get content"),
+            filename: z.string().optional().describe("Filename to read (from list results)")
+        }),
+        execute: async ({ action, filename }) => {
+            console.log(`[SYNTROPY] Tool: readResearchResults (action=${action})`);
+            const dataDir = path.join(PIXEL_ROOT, 'data');
+            if (action === 'list') {
+                try {
+                    const files = await fs.readdir(dataDir);
+                    const researchFiles = files
+                        .filter(f => f.startsWith('research-') && f.endsWith('.md'))
+                        .sort()
+                        .reverse(); // Newest first
+                    if (researchFiles.length === 0) {
+                        return {
+                            files: [],
+                            message: 'No research results found. Use spawnResearchWorker to gather information.'
+                        };
+                    }
+                    return {
+                        files: researchFiles.slice(0, 10), // Show last 10
+                        total: researchFiles.length,
+                        hint: "Call with action='read' and filename to see contents"
+                    };
+                }
+                catch (error) {
+                    return { error: error.message };
+                }
+            }
+            if (action === 'read') {
+                if (!filename) {
+                    return { error: "filename is required for action='read'" };
+                }
+                const filePath = path.join(dataDir, filename);
+                if (!await fs.pathExists(filePath)) {
+                    return { error: `Research file not found: ${filename}` };
+                }
+                try {
+                    const content = await fs.readFile(filePath, 'utf-8');
+                    await logAudit({ type: 'research_read', filename });
+                    return {
+                        filename,
+                        content: content.slice(0, 8000), // Limit to 8KB
+                        truncated: content.length > 8000
+                    };
+                }
+                catch (error) {
+                    return { error: error.message };
+                }
+            }
+            return { error: `Unknown action: ${action}` };
+        }
+    }),
     // ============================================
     // IDEA GARDEN - Brainstorming & Creativity
     // ============================================

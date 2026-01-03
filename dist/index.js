@@ -248,14 +248,17 @@ PHASE 2 - ECOSYSTEM AUDIT:
 6. Read filtered agent logs via 'readAgentLogs'.
 
 PHASE 3 - TASK EXECUTION:
+6b. Check for completed research: Call 'readResearchResults' with action='list'.
+   - If research exists, read it and incorporate findings into your work.
+   - Research informs decisions, Idea Garden seeds, and problem-solving.
 7. Execute any Human Inbox directives first.
 8. Work on Active Focus or pick from Short-Term Tasks.
 9. If complex fixes needed, use 'spawnWorker' to delegate (check status with 'checkWorkerStatus').
    - Only ONE worker at a time. Workers run in isolated containers with guardrails.
 9b. If you encounter something you don't understand or need external knowledge:
-   - Call 'spawnResearchWorker' with a specific query
-   - Workers can search the web and fetch documentation
-   - Results are written to /pixel/data/research-*.md
+   - Call 'spawnResearchWorker' with a specific query (web search, APIs, real-time data)
+   - Check results in later cycles with 'readResearchResults'
+   - Use findings to inform decisions or water Idea Garden seeds
 
 PHASE 4 - KNOWLEDGE RETENTION:
 10. Update CONTINUITY.md with findings, completed tasks, and new knowledge.
