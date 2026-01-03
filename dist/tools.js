@@ -1493,6 +1493,70 @@ ${content}
         }
     }),
     // ============================================
+    // WEB ACCESS - Direct synchronous lookups
+    // ============================================
+    webSearch: tool({
+        description: `Search the web and get results IMMEDIATELY (synchronous, same cycle).
+
+Use this for quick lookups during a cycle:
+- Get current Bitcoin/crypto prices
+- Check latest news headlines
+- Look up documentation
+- Verify facts before posting
+- Get real-time data for announcements
+
+This spawns a quick worker and WAITS for results (max 2 minutes).
+For deep research needing multiple sources, use spawnResearchWorker instead.
+
+EXAMPLES:
+- "current bitcoin price USD" → Returns live price
+- "latest nostr news" → Returns recent headlines
+- "ElizaOS documentation memory" → Returns relevant docs`,
+        inputSchema: z.object({
+            query: z.string().describe('What to search for. Be specific.'),
+            maxWaitSeconds: z.number().default(90).describe('Max seconds to wait for results (default: 90)')
+        }),
+        execute: async ({ query, maxWaitSeconds }) => {
+            console.log(`[SYNTROPY] Tool: webSearch (query="${query.slice(0, 50)}...")`);
+            const { execAsync } = await import('child_process').then(m => ({ execAsync: m.exec.__promisify__ || require('util').promisify(m.exec) }));
+            try {
+                // Run opencode directly for quick synchronous search
+                const timeout = Math.min(maxWaitSeconds, 120) * 1000; // Cap at 2 minutes
+                const { stdout, stderr } = await execAsync(`docker run --rm -e CI=true -e OPENROUTER_API_KEY="\${OPENROUTER_API_KEY}" ` +
+                    `-v ${PIXEL_ROOT}:/pixel -w /pixel --entrypoint opencode pixel-worker:latest ` +
+                    `run "Search for: ${query.replace(/"/g, '\\"')}. Return a concise summary of what you find. Be brief and factual." ` +
+                    `-m opencode/gpt-5-nano 2>&1`, {
+                    timeout,
+                    maxBuffer: 1024 * 1024, // 1MB buffer
+                    env: { ...process.env }
+                });
+                // Extract the useful part of the output (after the tool calls)
+                const lines = stdout.split('\n');
+                const resultLines = lines.filter(line => !line.includes('|  Search') &&
+                    !line.includes('|  webfetch') &&
+                    !line.includes('Exit code:') &&
+                    line.trim().length > 0);
+                const result = resultLines.join('\n').trim();
+                await logAudit({ type: 'web_search', query, success: true });
+                return {
+                    query,
+                    result: result.slice(-3000), // Last 3KB (the summary is at the end)
+                    source: 'live_web_search'
+                };
+            }
+            catch (error) {
+                await logAudit({ type: 'web_search_error', query, error: error.message });
+                if (error.killed || error.message.includes('timeout')) {
+                    return {
+                        error: `Search timed out after ${maxWaitSeconds}s. Try a simpler query or use spawnResearchWorker for async.`,
+                        query
+                    };
+                }
+                return { error: error.message, query };
+            }
+        }
+    }),
+    // ============================================
     // RESEARCH WORKER - Web Search & Knowledge Gathering
     // ============================================
     spawnResearchWorker: tool({
