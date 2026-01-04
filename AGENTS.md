@@ -3,6 +3,7 @@
 All agents operating within the Syntropy ecosystem MUST adhere to these rules.
 
 ## Reference Documentation
+- **Runtime Philosophy**: Refer to root `RUNTIME_PHILOSOPHY.md` for the **foundational laws** (Unix + Asimov synthesis) - **READ FIRST**
 - **Core SDK**: Refer to `docs/AI_SDK_6_DOCS.md` for AI SDK 6 implementation details.
 - **OpenCode Spec**: Refer to `docs/OPENCODE_SPEC.md` for Opencode operational protocols.
 - **Vision**: Refer to `syntropy-core/VISION.md` for the Oversoul directives.
