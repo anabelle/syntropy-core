@@ -48,8 +48,11 @@ export const nostrTools = {
           const exportedAt = new Date(data.exported_at);
           const ageMs = Date.now() - exportedAt.getTime();
 
-          // If file is less than 10 minutes old, use it
-          if (ageMs < 10 * 60 * 1000 && Array.isArray(data.posts) && data.posts.length > 0) {
+          // Use file if less than 6 hours old.
+          // Rationale: Agent posts infrequently, but hydrated data is still valid.
+          // Relay fallback is unreliable (hangs/timeouts), so prefer cached data.
+          const FRESHNESS_TOLERANCE_MS = 6 * 60 * 60 * 1000; // 6 hours
+          if (ageMs < FRESHNESS_TOLERANCE_MS && Array.isArray(data.posts) && data.posts.length > 0) {
             const posts = data.posts.slice(0, limit);
             await logAudit({ type: 'pixel_nostr_feed_read', count: posts.length, source: 'file_export' });
             return {
@@ -150,8 +153,11 @@ run();
           const exportedAt = new Date(data.exported_at);
           const ageMs = Date.now() - exportedAt.getTime();
 
-          // If file is less than 10 minutes old, use it
-          if (ageMs < 10 * 60 * 1000 && Array.isArray(data.mentions) && data.mentions.length > 0) {
+          // Use file if less than 6 hours old.
+          // Rationale: Mentions may be sparse, and agent interacts infrequently.
+          // Relay fallback is unreliable (hangs/timeouts), so prefer cached data.
+          const FRESHNESS_TOLERANCE_MS = 6 * 60 * 60 * 1000; // 6 hours
+          if (ageMs < FRESHNESS_TOLERANCE_MS && Array.isArray(data.mentions) && data.mentions.length > 0) {
             const mentions = data.mentions.slice(0, limit);
             await logAudit({ type: 'pixel_nostr_mentions_read', count: mentions.length, source: 'file_export' });
             return {
