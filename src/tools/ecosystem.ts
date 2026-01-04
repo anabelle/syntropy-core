@@ -4,6 +4,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import * as http from 'http';
 import {
   PIXEL_ROOT,
   LOG_PATH
@@ -12,40 +13,146 @@ import { logAudit } from '../utils';
 
 const execAsync = promisify(exec);
 
+// Helper to fetch JSON from HTTP endpoint with timeout
+async function fetchHealthEndpoint(url: string, timeoutMs: number = 5000): Promise<any> {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve({ success: true, data: JSON.parse(data), statusCode: res.statusCode });
+        } catch {
+          resolve({ success: false, error: 'Invalid JSON response' });
+        }
+      });
+    });
+    req.on('error', (err) => resolve({ success: false, error: err.message }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, error: 'Timeout' });
+    });
+  });
+}
+
+// Known health endpoints in the ecosystem (internal Docker network URLs)
+const HEALTH_ENDPOINTS: Record<string, { url: string; description: string }> = {
+  'api': { url: 'http://api:3000/health', description: 'LNPixels API' },
+  'agent': { url: 'http://agent:3003/health', description: 'Pixel Agent (ElizaOS)' },
+  'syntropy': { url: 'http://syntropy:3000/health', description: 'Syntropy Core' },
+};
+
 export const ecosystemTools = {
   getEcosystemStatus: tool({
-    description: 'Get status of all containers in the ecosystem via Docker',
+    description: `Get comprehensive status of all containers in the ecosystem.
+    
+Returns:
+- Container status from Docker (running, health status)
+- Deep health checks by calling /health endpoints for key services
+- Service-specific metrics (uptime, pixel count, agent count, model info)
+
+Use this for ecosystem audits and to verify services are actually responding, 
+not just that their containers are running.`,
     inputSchema: z.object({
-      confirm: z.boolean().describe('Set to true to perform ecosystem audit')
+      confirm: z.boolean().describe('Set to true to perform ecosystem audit'),
+      deepHealthCheck: z.boolean().optional().describe('If true, also call /health endpoints for supported services (default: true)')
     }),
-    execute: async () => {
-      console.log('[SYNTROPY] Tool: getEcosystemStatus (Docker)');
+    execute: async ({ deepHealthCheck = true }) => {
+      console.log('[SYNTROPY] Tool: getEcosystemStatus (Docker + Health Endpoints)');
       try {
+        // 1. Get container status from Docker
         const { stdout: rawOutput } = await execAsync('docker ps --format "{{json .}}"', { timeout: 10000 });
         const lines = rawOutput.toString().trim().split('\n');
 
-        const status = lines.map(line => {
+        const containers = lines.map(line => {
           try {
             const container = JSON.parse(line);
             return {
               name: container.Names,
               status: container.Status,
               image: container.Image,
-              id: container.ID
+              id: container.ID,
+              health: container.Status.includes('(healthy)') ? 'healthy'
+                : container.Status.includes('(unhealthy)') ? 'unhealthy'
+                  : container.Status.includes('(starting)') ? 'starting'
+                    : 'no-healthcheck'
             };
           } catch (e) {
             return null;
           }
         }).filter(Boolean);
 
-        await logAudit({ type: 'ecosystem_audit', status });
-        return status;
+        // 2. Deep health checks (call /health endpoints)
+        const healthChecks: Record<string, any> = {};
+
+        if (deepHealthCheck) {
+          console.log('[SYNTROPY] Running deep health checks...');
+
+          for (const [serviceName, config] of Object.entries(HEALTH_ENDPOINTS)) {
+            // Check if container is running first
+            const container = containers.find((c: any) => c.name.includes(serviceName));
+            if (!container) {
+              healthChecks[serviceName] = {
+                status: 'not-running',
+                description: config.description
+              };
+              continue;
+            }
+
+            const result = await fetchHealthEndpoint(config.url);
+            if (result.success) {
+              healthChecks[serviceName] = {
+                status: 'healthy',
+                description: config.description,
+                response: result.data,
+                ...(result.data.uptime && { uptimeSeconds: Math.floor(result.data.uptime || result.data.uptimeSeconds) }),
+                ...(result.data.pixels && { pixels: result.data.pixels }),
+                ...(result.data.agentCount && { agentCount: result.data.agentCount }),
+                ...(result.data.model && { model: result.data.model }),
+              };
+            } else {
+              healthChecks[serviceName] = {
+                status: 'unreachable',
+                description: config.description,
+                error: result.error,
+                containerStatus: container.status
+              };
+            }
+          }
+        }
+
+        // 3. Compile summary
+        const healthyServices = Object.values(healthChecks).filter((h: any) => h.status === 'healthy').length;
+        const totalServices = Object.keys(HEALTH_ENDPOINTS).length;
+        const allHealthy = healthyServices === totalServices;
+
+        const result = {
+          timestamp: new Date().toISOString(),
+          summary: {
+            containersRunning: containers.length,
+            healthEndpointsChecked: deepHealthCheck ? totalServices : 0,
+            healthyServices: deepHealthCheck ? healthyServices : 'not checked',
+            overallStatus: !deepHealthCheck ? 'partial-check' : allHealthy ? 'healthy' : 'degraded'
+          },
+          containers,
+          ...(deepHealthCheck && { healthChecks }),
+        };
+
+        await logAudit({
+          type: 'ecosystem_audit',
+          containersRunning: containers.length,
+          healthyServices: deepHealthCheck ? healthyServices : null,
+          overallStatus: result.summary.overallStatus
+        });
+
+        return result;
       } catch (error: any) {
         await logAudit({ type: 'audit_error', error: error.message });
         return { error: `Docker error: ${error.message}` };
       }
     }
   }),
+
 
   readAgentLogs: tool({
     description: 'Read recent logs from the Pixel agent. Automatically filters noise for Syntropy intelligence.',
