@@ -7,6 +7,37 @@ import { MODEL_NAME, MODEL_PROVIDER, PIXEL_ROOT, OPENROUTER_API_KEY } from './co
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
+import * as http from 'http';
+
+// ============================================
+// HEALTH ENDPOINT
+// ============================================
+// Lightweight HTTP server for health checks.
+// Used by the self-rebuild worker to verify syntropy started successfully.
+
+const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3000', 10);
+const startupTime = new Date();
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    const uptimeMs = Date.now() - startupTime.getTime();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'syntropy',
+      startedAt: startupTime.toISOString(),
+      uptimeSeconds: Math.floor(uptimeMs / 1000),
+      model: MODEL_NAME,
+    }));
+  } else {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  }
+});
+
+healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
+  console.log(`[SYNTROPY] Health endpoint listening on :${HEALTH_PORT}/health`);
+});
 
 // ============================================
 // SELF-SCHEDULING SYSTEM

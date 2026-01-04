@@ -221,15 +221,15 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   const recentTasks = ledger.tasks
     .filter(t => t.completedAt)
     .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime());
-  
+
   if (recentTasks.length > 0) {
     const lastTask = recentTasks[0];
     const lastCompleted = new Date(lastTask.completedAt!).getTime();
     const elapsed = Date.now() - lastCompleted;
-    
+
     // Only enforce cooldown if last task FAILED (exitCode !== 0 or status === 'failed')
     const lastTaskFailed = lastTask.status === 'failed' || (lastTask.exitCode !== undefined && lastTask.exitCode !== 0);
-    
+
     if (lastTaskFailed && elapsed < SPAWN_COOLDOWN_MS) {
       const waitSec = Math.ceil((SPAWN_COOLDOWN_MS - elapsed) / 1000);
       await logAudit({ type: 'worker_spawn_rejected', reason: 'cooldown_after_failure', waitSeconds: waitSec, lastTaskId: lastTask.id });
@@ -510,6 +510,9 @@ ${existingContinuity}
     const taskId = crypto.randomUUID();
     const ledger = await readTaskLedger();
 
+    // HOST_PIXEL_ROOT for docker compose --project-directory
+    const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
+
     const rebuildTask: Task = {
       id: taskId,
       status: 'pending',
@@ -521,20 +524,37 @@ SYNTROPY SELF-REBUILD PROTOCOL
 ==============================
 Reason: ${reason}
 
+IMPORTANT: This is a syntropy-rebuild task. Guardrails are bypassed for docker compose syntropy commands.
+
 Steps:
 1. cd /pixel && git fetch origin
 2. ${gitRef ? `git checkout ${gitRef}` : 'git pull origin main'}
-3. docker compose build syntropy
-4. docker compose up -d syntropy
-5. Wait up to 5 minutes for health check:
-   while ! curl -sf http://syntropy:3000/health; do sleep 10; done
-6. If healthy within 5 min: exit 0 (success)
-7. If NOT healthy:
-   - docker compose logs syntropy --tail=100
-   - Notify: The rebuild failed. Manual intervention may be needed.
-   - exit 1 (failure)
+3. docker compose --project-directory ${hostPixelRoot} build syntropy
+4. docker compose --project-directory ${hostPixelRoot} up -d syntropy
+5. Wait up to 5 minutes for syntropy to become healthy:
+   
+   HEALTH_CHECK_URL="http://syntropy:3000/health"
+   MAX_ATTEMPTS=30  # 30 * 10s = 5 minutes
+   ATTEMPT=0
+   
+   echo "Waiting for syntropy health endpoint..."
+   while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+     if wget -q -O- "$HEALTH_CHECK_URL" 2>/dev/null | grep -q '"status":"ok"'; then
+       echo "✅ Syntropy is healthy!"
+       exit 0
+     fi
+     ATTEMPT=$((ATTEMPT + 1))
+     echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - waiting 10s..."
+     sleep 10
+   done
+   
+   echo "❌ Health check failed after $MAX_ATTEMPTS attempts"
+   docker compose --project-directory ${hostPixelRoot} logs syntropy --tail=100
+   echo "REBUILD FAILED: Syntropy did not become healthy. Manual intervention may be needed."
+   exit 1
 
 The new Syntropy will read CONTINUITY.md to restore context.
+The health endpoint is available at http://syntropy:3000/health inside the Docker network.
         `,
         context: `Self-rebuild triggered at ${new Date().toISOString()}. Reason: ${reason}`
       },
@@ -555,7 +575,8 @@ The new Syntropy will read CONTINUITY.md to restore context.
       console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
     }
 
-    const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
+
+
 
     const proc = spawn('docker', [
       'compose', '--profile', 'worker',
