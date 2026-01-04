@@ -5,32 +5,97 @@ import * as path from 'path';
 import { PIXEL_ROOT } from '../config';
 import { logAudit } from '../utils';
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
+// --- Semantic Similarity Helpers ---
+/**
+ * Extract important keywords from a title/content, filtering out common words.
+ */
+function extractKeywords(text) {
+    const stopwords = new Set([
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
+        'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has',
+        'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can',
+        'this', 'that', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'we', 'our',
+        'via', 'use', 'using', 'into', 'during', 'before', 'after', 'about', 'between',
+        'through', 'under', 'over', 'each', 'all', 'any', 'both', 'more', 'most', 'other'
+    ]);
+    return text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .split(/\s+/)
+        .filter(word => word.length > 2 && !stopwords.has(word));
+}
+/**
+ * Calculate Jaccard similarity between two sets of keywords.
+ */
+function calculateSimilarity(keywords1, keywords2) {
+    const set1 = new Set(keywords1);
+    const set2 = new Set(keywords2);
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    const union = new Set([...set1, ...set2]);
+    return union.size > 0 ? intersection.size / union.size : 0;
+}
+/**
+ * Parse all seeds from the garden for similarity matching.
+ */
+function parseAllSeeds(garden) {
+    const seeds = [];
+    const seedPattern = /### ([^\r\n]+)[\r\n]+- \*\*Planted\*\*: [^\r\n]+[\r\n]+- \*\*Origin\*\*: ([^\r\n]+)[\r\n]+- \*\*Waterings\*\*: (\d+)/g;
+    let match;
+    while ((match = seedPattern.exec(garden)) !== null) {
+        seeds.push({
+            title: match[1].trim(),
+            origin: match[2].trim(),
+            waterings: parseInt(match[3]),
+            section: 'Seeds' // We can refine this if needed
+        });
+    }
+    return seeds;
+}
+/**
+ * Find similar existing seeds based on title + origin content.
+ */
+function findSimilarSeeds(newTitle, newContent, existingSeeds) {
+    const newKeywords = extractKeywords(`${newTitle} ${newContent}`);
+    const matches = [];
+    for (const seed of existingSeeds) {
+        const existingKeywords = extractKeywords(`${seed.title} ${seed.origin}`);
+        const similarity = calculateSimilarity(newKeywords, existingKeywords);
+        if (similarity >= 0.3) { // 30% keyword overlap threshold
+            matches.push({ seed, similarity });
+        }
+    }
+    return matches.sort((a, b) => b.similarity - a.similarity);
+}
 export const ideationTools = {
     tendIdeaGarden: tool({
         description: `Tend the Idea Garden (IDEAS.md). Use at the END of each cycle to nurture creative ideas.
 
 Actions:
 - 'read': View all current seeds with their watering counts
-- 'plant': Add a new seed from this cycle's observations (max 1 per cycle)
-- 'water': Add a thought to an existing seed (exactly 1 per cycle)
+- 'plant': Add a new seed from this cycle's observations (max 1 per cycle). BLOCKS if similar idea exists - water instead!
+- 'water': Add a thought to an existing seed (exactly 1 per cycle). ALWAYS prefer this over planting duplicates!
 - 'harvest': Move a mature idea (5+ waterings) to CONTINUITY.md pending tasks
 - 'compost': Archive a stale or failed idea
 - 'research': Spawn a worker to research external sources for a seed
+- 'merge': Combine multiple similar seeds into one evolved idea (provide seedTitle as primary, mergeSeeds as array of titles to absorb)
+- 'consolidate': Analyze garden for duplicate/similar ideas and suggest merges (no arguments needed)
 
 Rules:
 - Water ONE existing seed per cycle (if any exist)
 - Plant at most ONE new seed per cycle
+- BEFORE planting: Always check if a similar idea exists - water it instead!
 - Harvest requires 5+ waterings AND clear implementation path
 - Research spawns a worker with webfetch capability
 
 The garden enables ideas to mature over multiple cycles before becoming tasks.`,
         inputSchema: z.object({
-            action: z.enum(['read', 'plant', 'water', 'harvest', 'compost', 'research']).describe('Action to perform'),
-            seedTitle: z.string().optional().describe('Title of the seed (required for water/harvest/compost/research)'),
-            content: z.string().optional().describe('For plant: the idea origin. For water: new thought. For harvest: task description. For research: research query.'),
+            action: z.enum(['read', 'plant', 'water', 'harvest', 'compost', 'research', 'merge', 'consolidate']).describe('Action to perform'),
+            seedTitle: z.string().optional().describe('Title of the seed (required for water/harvest/compost/research/merge)'),
+            content: z.string().optional().describe('For plant: the idea origin. For water: new thought. For harvest: task description. For research: research query. For merge: synthesis of combined ideas.'),
+            mergeSeeds: z.array(z.string()).optional().describe('For merge: array of seed titles to absorb into the primary seed'),
             author: z.enum(['Syntropy', 'Human']).default('Syntropy').describe('Who is tending the garden')
         }),
-        execute: async ({ action, seedTitle, content, author }) => {
+        execute: async ({ action, seedTitle, content, mergeSeeds, author }) => {
             console.log(`[SYNTROPY] Tool: tendIdeaGarden (action=${action}, seed=${seedTitle || 'N/A'})`);
             const IDEAS_PATH = path.resolve(PIXEL_ROOT, 'IDEAS.md');
             const CONTINUITY_PATH = path.resolve(PIXEL_ROOT, 'CONTINUITY.md');
@@ -96,6 +161,22 @@ The garden enables ideas to mature over multiple cycles before becoming tasks.`,
                         return {
                             error: `A seed titled "${seedTitle}" already exists.`,
                             hint: `Use action='water' to add thoughts to the existing seed instead of planting a duplicate.`
+                        };
+                    }
+                    // Check for semantically similar seeds (CRITICAL: prevents duplicate ideas)
+                    const existingSeeds = parseAllSeeds(garden);
+                    const similarSeeds = findSimilarSeeds(seedTitle, content, existingSeeds);
+                    if (similarSeeds.length > 0) {
+                        const suggestions = similarSeeds.slice(0, 3).map(({ seed, similarity }) => `- "${seed.title}" (${Math.round(similarity * 100)}% similar, ${seed.waterings} waterings)`).join('\n');
+                        return {
+                            error: `BLOCKED: Found ${similarSeeds.length} similar idea(s) already in the garden.`,
+                            similarSeeds: similarSeeds.slice(0, 3).map(s => ({
+                                title: s.seed.title,
+                                similarity: Math.round(s.similarity * 100),
+                                waterings: s.seed.waterings
+                            })),
+                            hint: `WATER an existing seed instead of planting a duplicate!\n\nSimilar seeds:\n${suggestions}\n\nUse action='water' with seedTitle set to the most relevant existing seed, adding your new insight as the content.`,
+                            action: 'water_instead'
                         };
                     }
                     const newSeed = `
@@ -270,6 +351,124 @@ FORMAT YOUR RESPONSE:
                         seedTitle,
                         taskId: result.taskId,
                         message: `Research worker spawned for "${seedTitle}". Check status with checkWorkerStatus("${result.taskId}"). Results will inform next watering.`
+                    };
+                }
+                if (action === 'merge') {
+                    if (!seedTitle || !content || !mergeSeeds || mergeSeeds.length === 0) {
+                        return {
+                            error: "For merge: 'seedTitle' (primary seed), 'content' (synthesis), and 'mergeSeeds' (array of titles to absorb) are all required"
+                        };
+                    }
+                    // Find the primary seed
+                    const primaryRegex = new RegExp(`### ${seedTitle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\n([\\s\\S]*?)(?=###|## [🌱🌿🌸🍂]|$)`);
+                    const primaryMatch = garden.match(primaryRegex);
+                    if (!primaryMatch) {
+                        return { error: `Primary seed "${seedTitle}" not found in garden` };
+                    }
+                    let totalWaterings = 0;
+                    const mergedLogs = [];
+                    const absorbedTitles = [];
+                    // Extract watering count from primary
+                    const primaryWateringMatch = primaryMatch[1].match(/- \*\*Waterings\*\*: (\d+)/);
+                    totalWaterings += primaryWateringMatch ? parseInt(primaryWateringMatch[1]) : 0;
+                    // Process each seed to absorb
+                    for (const absorbTitle of mergeSeeds) {
+                        const absorbRegex = new RegExp(`### ${absorbTitle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\n([\\s\\S]*?)(?=###|## [🌱🌿🌸🍂]|$)`);
+                        const absorbMatch = garden.match(absorbRegex);
+                        if (absorbMatch) {
+                            // Extract waterings
+                            const absorbWateringMatch = absorbMatch[1].match(/- \*\*Waterings\*\*: (\d+)/);
+                            totalWaterings += absorbWateringMatch ? parseInt(absorbWateringMatch[1]) : 0;
+                            // Extract origin for merged log
+                            const originMatch = absorbMatch[1].match(/- \*\*Origin\*\*: ([^\r\n]+)/);
+                            if (originMatch) {
+                                mergedLogs.push(`[MERGED from "${absorbTitle}"] ${originMatch[1]}`);
+                            }
+                            // Remove the absorbed seed
+                            garden = garden.replace(`### ${absorbTitle}\n${absorbMatch[1]}`, '');
+                            absorbedTitles.push(absorbTitle);
+                        }
+                    }
+                    // Update the primary seed with merged info
+                    const timestamp = new Date().toISOString().split('T')[0];
+                    const mergeLogEntry = `  - [${timestamp} ${author}] EVOLVED: ${content} (Merged ${absorbedTitles.length} related ideas: ${absorbedTitles.join(', ')})\n`;
+                    let updatedPrimaryContent = primaryMatch[1];
+                    // Update waterings count
+                    updatedPrimaryContent = updatedPrimaryContent.replace(/- \*\*Waterings\*\*: \d+/, `- **Waterings**: ${totalWaterings}`);
+                    // Add merge log entry
+                    updatedPrimaryContent = updatedPrimaryContent.replace(/- \*\*Log\*\*:\n/, `- **Log**:\n${mergeLogEntry}`);
+                    garden = garden.replace(primaryMatch[0], `### ${seedTitle}\n${updatedPrimaryContent}`);
+                    garden = garden.replace(/\n{3,}/g, '\n\n');
+                    await fs.writeFile(IDEAS_PATH, garden);
+                    await logAudit({ type: 'idea_garden_merge', primarySeed: seedTitle, absorbed: absorbedTitles, newWaterings: totalWaterings });
+                    return {
+                        success: true,
+                        action: 'merged',
+                        primarySeed: seedTitle,
+                        absorbed: absorbedTitles,
+                        newWaterings: totalWaterings,
+                        message: `Merged ${absorbedTitles.length} seeds into "${seedTitle}". Now has ${totalWaterings} waterings.`
+                    };
+                }
+                if (action === 'consolidate') {
+                    // Analyze all seeds for similarity and suggest merges
+                    const existingSeeds = parseAllSeeds(garden);
+                    const similarityGroups = [];
+                    const processed = new Set(); // Use index instead of title!
+                    for (let i = 0; i < existingSeeds.length; i++) {
+                        if (processed.has(i))
+                            continue;
+                        const seed = existingSeeds[i];
+                        const keywords = extractKeywords(`${seed.title} ${seed.origin}`);
+                        const group = [seed];
+                        processed.add(i);
+                        for (let j = i + 1; j < existingSeeds.length; j++) {
+                            if (processed.has(j))
+                                continue;
+                            const other = existingSeeds[j];
+                            // Check for exact title match OR semantic similarity
+                            const exactTitleMatch = seed.title.toLowerCase() === other.title.toLowerCase();
+                            const otherKeywords = extractKeywords(`${other.title} ${other.origin}`);
+                            const similarity = calculateSimilarity(keywords, otherKeywords);
+                            if (exactTitleMatch || similarity >= 0.25) { // Lowered threshold, added exact match
+                                group.push(other);
+                                processed.add(j);
+                            }
+                        }
+                        if (group.length > 1) {
+                            similarityGroups.push({
+                                seeds: group.sort((a, b) => b.waterings - a.waterings), // Most watered first
+                                similarity: 0.5 // Average similarity (simplified)
+                            });
+                        }
+                    }
+                    if (similarityGroups.length === 0) {
+                        return {
+                            success: true,
+                            action: 'consolidated',
+                            duplicatesFound: 0,
+                            message: 'Garden is clean! No similar ideas detected.'
+                        };
+                    }
+                    const suggestions = similarityGroups.map((group, i) => {
+                        const primary = group.seeds[0];
+                        const toMerge = group.seeds.slice(1);
+                        return {
+                            group: i + 1,
+                            primarySeed: primary.title,
+                            primaryWaterings: primary.waterings,
+                            toMerge: toMerge.map(s => ({ title: s.title, waterings: s.waterings })),
+                            mergeCommand: `action='merge', seedTitle='${primary.title}', mergeSeeds=[${toMerge.map(s => `'${s.title}'`).join(', ')}], content='Consolidated insight synthesizing related ideas'`
+                        };
+                    });
+                    await logAudit({ type: 'idea_garden_consolidate', groupsFound: similarityGroups.length });
+                    return {
+                        success: true,
+                        action: 'consolidated',
+                        duplicatesFound: similarityGroups.length,
+                        suggestions,
+                        hint: 'Use the merge action to combine each group. The seed with most waterings is suggested as primary.',
+                        message: `Found ${similarityGroups.length} groups of similar ideas that could be merged!`
                     };
                 }
                 return { error: `Unknown action: ${action}` };

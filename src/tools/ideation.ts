@@ -541,24 +541,29 @@ FORMAT YOUR RESPONSE:
           // Analyze all seeds for similarity and suggest merges
           const existingSeeds = parseAllSeeds(garden);
           const similarityGroups: Array<{ seeds: SeedInfo[]; similarity: number }> = [];
-          const processed = new Set<string>();
+          const processed = new Set<number>(); // Use index instead of title!
 
-          for (const seed of existingSeeds) {
-            if (processed.has(seed.title)) continue;
+          for (let i = 0; i < existingSeeds.length; i++) {
+            if (processed.has(i)) continue;
 
+            const seed = existingSeeds[i];
             const keywords = extractKeywords(`${seed.title} ${seed.origin}`);
             const group: SeedInfo[] = [seed];
-            processed.add(seed.title);
+            processed.add(i);
 
-            for (const other of existingSeeds) {
-              if (processed.has(other.title)) continue;
+            for (let j = i + 1; j < existingSeeds.length; j++) {
+              if (processed.has(j)) continue;
 
+              const other = existingSeeds[j];
+
+              // Check for exact title match OR semantic similarity
+              const exactTitleMatch = seed.title.toLowerCase() === other.title.toLowerCase();
               const otherKeywords = extractKeywords(`${other.title} ${other.origin}`);
               const similarity = calculateSimilarity(keywords, otherKeywords);
 
-              if (similarity >= 0.3) {
+              if (exactTitleMatch || similarity >= 0.25) { // Lowered threshold, added exact match
                 group.push(other);
-                processed.add(other.title);
+                processed.add(j);
               }
             }
 
