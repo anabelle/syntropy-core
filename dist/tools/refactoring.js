@@ -33,17 +33,31 @@ to monitor progress after execution starts.`,
                     return { error: 'REFACTOR_QUEUE.md not found. Create it first.' };
                 }
                 const content = await fs.readFile(QUEUE_PATH, 'utf-8');
+                // Also check archive to prevent re-processing completed tasks
+                const ARCHIVE_PATH = path.resolve(PIXEL_ROOT, 'REFACTOR_ARCHIVE.md');
+                let archivedTaskIds = [];
+                if (fs.existsSync(ARCHIVE_PATH)) {
+                    const archiveContent = await fs.readFile(ARCHIVE_PATH, 'utf-8');
+                    const archiveMatch = archiveContent.matchAll(/\*\*(T\d{3}[ab]?)\*\* \| ✅ DONE/g);
+                    archivedTaskIds = [...archiveMatch].map(m => m[1]);
+                }
                 if (action === 'check') {
                     // Find the next READY task
-                    const taskPattern = /### (T\d{3}): ([^\n]+) (⬜ READY|🟡 IN_PROGRESS|✅ DONE|❌ FAILED)/g;
+                    const taskPattern = /### (T\d{3}[ab]?): ([^\n]+) (⬜ READY|🟡 IN_PROGRESS|✅ DONE|❌ FAILED)/g;
                     const tasks = [];
                     let match;
                     while ((match = taskPattern.exec(content)) !== null) {
                         tasks.push({ id: match[1], title: match[2], status: match[3] });
                     }
-                    const readyTasks = tasks.filter(t => t.status === '⬜ READY');
+                    // Filter out tasks that are already archived (even if marked READY in queue)
+                    const readyTasks = tasks.filter(t => t.status === '⬜ READY' && !archivedTaskIds.includes(t.id));
                     const inProgress = tasks.filter(t => t.status === '🟡 IN_PROGRESS');
                     const done = tasks.filter(t => t.status === '✅ DONE');
+                    // Check for sync issues
+                    const syncIssues = tasks.filter(t => t.status === '⬜ READY' && archivedTaskIds.includes(t.id));
+                    if (syncIssues.length > 0) {
+                        console.log(`[SYNTROPY] Warning: ${syncIssues.length} task(s) marked READY but already archived. Run verifyQueueArchiveSync to fix.`);
+                    }
                     if (inProgress.length > 0) {
                         return {
                             warning: 'A task is already in progress',
@@ -54,7 +68,8 @@ to monitor progress after execution starts.`,
                     if (readyTasks.length === 0) {
                         return {
                             message: 'No READY tasks in queue!',
-                            stats: { ready: 0, done: done.length, total: tasks.length }
+                            stats: { ready: 0, done: done.length, total: tasks.length },
+                            note: syncIssues.length > 0 ? `${syncIssues.length} task(s) skipped (already archived)` : undefined
                         };
                     }
                     // Check dependencies for the first ready task
@@ -403,6 +418,138 @@ Returns suggestions that you can then add via 'addRefactorTask'.`,
                 };
             }
             catch (error) {
+                return { error: error.message };
+            }
+        }
+    }),
+    verifyQueueArchiveSync: tool({
+        description: `Verify that REFACTOR_QUEUE.md and REFACTOR_ARCHIVE.md are in sync.
+    
+Checks for:
+1. Tasks marked READY in queue but DONE in archive (should not be retried)
+2. Tasks marked DONE in queue but not in archive (should be archived)
+3. Tasks marked IN_PROGRESS for too long (might be stuck)
+
+Use action='check' to see issues, action='fix' to auto-repair inconsistencies.`,
+        inputSchema: z.object({
+            action: z.enum(['check', 'fix']).describe("'check' to see issues, 'fix' to auto-repair"),
+        }),
+        execute: async ({ action }) => {
+            const QUEUE_PATH = path.resolve(PIXEL_ROOT, 'REFACTOR_QUEUE.md');
+            const ARCHIVE_PATH = path.resolve(PIXEL_ROOT, 'REFACTOR_ARCHIVE.md');
+            console.log(`[SYNTROPY] Tool: verifyQueueArchiveSync (action=${action})`);
+            try {
+                if (!fs.existsSync(QUEUE_PATH)) {
+                    return { error: 'REFACTOR_QUEUE.md not found.' };
+                }
+                if (!fs.existsSync(ARCHIVE_PATH)) {
+                    return { error: 'REFACTOR_ARCHIVE.md not found.' };
+                }
+                const queueContent = await fs.readFile(QUEUE_PATH, 'utf-8');
+                const archiveContent = await fs.readFile(ARCHIVE_PATH, 'utf-8');
+                // Parse tasks from queue
+                const queueTaskPattern = /### (T\d{3}[ab]?): ([^\n]+) (⬜ READY|🟡 IN_PROGRESS|✅ DONE|❌ FAILED)/g;
+                const queueTasks = [];
+                let queueMatch;
+                while ((queueMatch = queueTaskPattern.exec(queueContent)) !== null) {
+                    queueTasks.push({ id: queueMatch[1], title: queueMatch[2], status: queueMatch[3] });
+                }
+                // Parse tasks from archive (format: | **T001** | ✅ DONE | Title | Date |)
+                const archiveTaskPattern = /\*\*(T\d{3}[ab]?)\*\* \| ✅ DONE/g;
+                const archivedTaskIds = [];
+                let archiveMatch;
+                while ((archiveMatch = archiveTaskPattern.exec(archiveContent)) !== null) {
+                    archivedTaskIds.push(archiveMatch[1]);
+                }
+                const issues = [];
+                // Check 1: Tasks READY in queue but DONE in archive
+                const readyTasks = queueTasks.filter(t => t.status === '⬜ READY');
+                for (const task of readyTasks) {
+                    if (archivedTaskIds.includes(task.id)) {
+                        issues.push({
+                            type: 'ready_but_archived',
+                            taskId: task.id,
+                            title: task.title,
+                            message: `${task.id} is READY in queue but already DONE in archive - will cause duplicate processing!`
+                        });
+                    }
+                }
+                // Check 2: Tasks DONE in queue but not in archive
+                const doneTasks = queueTasks.filter(t => t.status === '✅ DONE');
+                for (const task of doneTasks) {
+                    if (!archivedTaskIds.includes(task.id)) {
+                        issues.push({
+                            type: 'done_not_archived',
+                            taskId: task.id,
+                            title: task.title,
+                            message: `${task.id} is DONE in queue but not in archive - should be archived for history`
+                        });
+                    }
+                }
+                // Check 3: Tasks IN_PROGRESS (might be stuck)
+                const inProgressTasks = queueTasks.filter(t => t.status === '🟡 IN_PROGRESS');
+                for (const task of inProgressTasks) {
+                    issues.push({
+                        type: 'in_progress',
+                        taskId: task.id,
+                        title: task.title,
+                        message: `${task.id} is IN_PROGRESS - verify worker is running or mark as DONE/FAILED`
+                    });
+                }
+                if (action === 'check') {
+                    return {
+                        healthy: issues.length === 0,
+                        issueCount: issues.length,
+                        issues,
+                        queueStats: {
+                            ready: readyTasks.length,
+                            inProgress: inProgressTasks.length,
+                            done: doneTasks.length,
+                            total: queueTasks.length
+                        },
+                        archiveStats: {
+                            total: archivedTaskIds.length
+                        },
+                        message: issues.length === 0
+                            ? 'Queue and archive are in sync!'
+                            : `Found ${issues.length} issue(s) that may cause problems. Use action='fix' to auto-repair.`
+                    };
+                }
+                if (action === 'fix') {
+                    let updatedQueue = queueContent;
+                    let fixedCount = 0;
+                    // Fix issues type 'ready_but_archived' - mark as DONE in queue
+                    for (const issue of issues.filter(i => i.type === 'ready_but_archived')) {
+                        const pattern = new RegExp(`### ${issue.taskId}: ${issue.title?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ⬜ READY`);
+                        if (pattern.test(updatedQueue)) {
+                            updatedQueue = updatedQueue.replace(pattern, `### ${issue.taskId}: ${issue.title} ✅ DONE`);
+                            fixedCount++;
+                        }
+                    }
+                    // Update status counts
+                    const newReadyCount = (updatedQueue.match(/### T\d{3}[ab]?: [^\n]+ ⬜ READY/g) || []).length;
+                    const newDoneCount = (updatedQueue.match(/### T\d{3}[ab]?: [^\n]+ ✅ DONE/g) || []).length;
+                    updatedQueue = updatedQueue.replace(/\| ⬜ READY \| \d+ \|/, `| ⬜ READY | ${newReadyCount} |`);
+                    updatedQueue = updatedQueue.replace(/\| ✅ DONE \| \d+ \|/, `| ✅ DONE | ${newDoneCount} |`);
+                    await fs.writeFile(QUEUE_PATH, updatedQueue);
+                    await logAudit({
+                        type: 'queue_archive_sync_fix',
+                        fixedCount,
+                        issues: issues.map(i => ({ type: i.type, taskId: i.taskId }))
+                    });
+                    return {
+                        success: true,
+                        fixedCount,
+                        remaining: issues.length - fixedCount,
+                        message: fixedCount > 0
+                            ? `Fixed ${fixedCount} issue(s). Queue is now synced with archive.`
+                            : 'No auto-fixable issues found. Manual review may be needed for remaining issues.'
+                    };
+                }
+                return { error: 'Invalid action' };
+            }
+            catch (error) {
+                await logAudit({ type: 'queue_archive_sync_error', error: error.message });
                 return { error: error.message };
             }
         }
