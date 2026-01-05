@@ -162,7 +162,7 @@ not just that their containers are running.`,
     execute: async ({ lines }) => {
       console.log(`[SYNTROPY] Tool: readAgentLogs (${lines} lines)`);
       try {
-        const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines * 5} --no-color --no-log-prefix agent`, { timeout: 15000 });
+        const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines * 5} --no-color --no-log-prefix agent`, { timeout: 15000, cwd: PIXEL_ROOT });
         const logLines = rawLogs.toString().split('\n');
 
         const filteredLines = logLines.filter(line => {
@@ -233,13 +233,13 @@ not just that their containers are running.`,
         // 1. Determine which services to query
         let servicesToQuery = services;
         if (!servicesToQuery || servicesToQuery.length === 0) {
-          const { stdout } = await execAsync('docker compose ps --format "{{.Service}}"', { timeout: 10000 });
+          const { stdout } = await execAsync('docker compose ps --format "{{.Service}}"', { timeout: 10000, cwd: PIXEL_ROOT });
           servicesToQuery = stdout.trim().split('\n').filter(s => s && s !== 'syntropy'); // Exclude self to avoid log spam
         }
 
         // 2. Fetch logs using docker compose (handles prefixes and interleaving)
         const serviceFlags = servicesToQuery.join(' ');
-        const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines} --no-color ${serviceFlags}`, { timeout: 20000 });
+        const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines} --no-color ${serviceFlags}`, { timeout: 20000, cwd: PIXEL_ROOT });
 
         const logs = rawLogs.toString().trim();
         await logAudit({ type: 'ecosystem_logs_read', services: servicesToQuery, lines });
