@@ -29,7 +29,21 @@ const healthServer = http.createServer((req, res) => {
       startedAt: startupTime.toISOString(),
       uptimeSeconds: Math.floor(uptimeMs / 1000),
       model: MODEL_NAME,
+      nextRun: nextRunTimeout ? 'scheduled' : 'running',
     }));
+  } else if (req.url === '/wake') {
+    if (runningCycle) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'cycle_already_in_progress' }));
+    } else {
+      console.log('[SYNTROPY] External wake-up signal received!');
+      if (nextRunTimeout) clearTimeout(nextRunTimeout);
+      // Run immediately
+      runAutonomousCycle().catch(err => console.error('[SYNTROPY] Wake-up cycle failed:', err));
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'waking_up' }));
+    }
   } else {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
