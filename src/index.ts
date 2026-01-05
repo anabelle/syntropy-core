@@ -171,6 +171,7 @@ PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
 PHASE 1 - CONTEXT LOADING:
 1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
 2. Check Human Inbox for priority directives.
+3. OPTIONAL: Use 'viewRecentCommits' if you need context on what changed recently (useful after waking from long sleep or debugging issues).
 
 PHASE 2 - ECOSYSTEM AUDIT:
 3. Audit ecosystem health via 'getEcosystemStatus'.
