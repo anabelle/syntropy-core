@@ -171,7 +171,7 @@ PHASE 2 - ECOSYSTEM AUDIT:
 
 PHASE 3 - TASK EXECUTION:
 7. Execute any Human Inbox directives first.
-8. Work on Active Focus or pick from Short-Term Tasks.
+8. Work on Active Focus, pick from Short-Term Tasks, or process HARVESTED TASKS from 'CONTINUITY.md'.
 9. If complex fixes needed, use 'spawnWorker' to delegate (check status with 'checkWorkerStatus').
    - Only ONE worker at a time. Workers run in isolated containers with guardrails.
 
@@ -195,12 +195,13 @@ PHASE 6 - NARRATIVE & STORYTELLING:
 
 PHASE 7 - IDEA GARDEN:
 18. Call 'tendIdeaGarden' with action='read' to see current seeds.
-19. If seeds exist: WATER one (add a thought/insight from this cycle's learnings).
-20. If you have a genuinely NEW idea: Try to PLANT. If blocked (similar exists), water the suggested seed instead.
-21. Periodically: Run action='consolidate' to find and merge duplicates.
+19. IF a seed has 5+ waterings: HARVEST it (this moves it to CONTINUITY.md as a pending task).
+20. ELSE IF seeds exist: WATER one (add a thought/insight from this cycle's learnings).
+21. IF you have a genuinely NEW idea: Try to PLANT. If blocked (similar exists), water the suggested seed instead.
+22. Periodically: Run action='consolidate' to find and merge duplicates.
 
 PHASE 8 - WRAP UP:
-22. Call 'scheduleNextRun' to decide when to wake up next.
+23. Call 'scheduleNextRun' to decide when to wake up next.
 
 IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with reports—if the recovery was epic, tell the story. If the architecture improved, explain the vision.`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
