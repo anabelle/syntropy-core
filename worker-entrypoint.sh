@@ -211,6 +211,7 @@ timeout --signal=SIGTERM --kill-after=60 "$WORKER_TIMEOUT_SECONDS" \
     -m "$OPENCODE_MODEL" \
     --file /pixel/AGENTS.md \
     --file /pixel/CONTINUITY.md \
+    --yes-to-all \
   </dev/null 2>&1 | tee "$OUTPUT_FILE" "$LIVE_LOG" | tee -a "$OPENCODE_LIVE_LOG" || EXIT_CODE=$?
 
 # Handle timeout specifically
