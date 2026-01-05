@@ -5,7 +5,8 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import {
-  PIXEL_ROOT
+  PIXEL_ROOT,
+  OPENCODE_MODEL
 } from '../config';
 import { logAudit } from '../utils';
 
@@ -47,7 +48,7 @@ EXAMPLES:
           `docker run --rm -e CI=true -e OPENROUTER_API_KEY="\${OPENROUTER_API_KEY}" ` +
           `-v ${PIXEL_ROOT}:/pixel -w /pixel --entrypoint opencode pixel-worker:latest ` +
           `run "Search for: ${query.replace(/"/g, '\\"')}. Return a concise summary of what you find. Be brief and factual." ` +
-          `-m opencode/gpt-5-nano 2>&1`,
+          `-m ${OPENCODE_MODEL} 2>&1`,
           {
             timeout,
             maxBuffer: 1024 * 1024,
