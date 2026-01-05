@@ -198,5 +198,39 @@ The reason you provide becomes the commit message - make it descriptive!`,
         return { error: error.message };
       }
     }
+  }),
+  checkDailyReset: tool({
+    description: 'Check if this is the first cycle of a new day and perform daily maintenance tasks. Returns whether a new day has started since the last check.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      console.log('[SYNTROPY] Tool: checkDailyReset');
+      const lastCheckFile = path.join(PIXEL_ROOT, 'data', '.last-daily-check');
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+
+      let isNewDay = false;
+      let lastDay = '';
+
+      if (fs.existsSync(lastCheckFile)) {
+        lastDay = await fs.readFile(lastCheckFile, 'utf-8');
+        if (lastDay !== todayStr) {
+          isNewDay = true;
+        }
+      } else {
+        isNewDay = true; // First time run
+      }
+
+      if (isNewDay) {
+        await fs.ensureDir(path.dirname(lastCheckFile));
+        await fs.writeFile(lastCheckFile, todayStr);
+      }
+
+      return {
+        isNewDay,
+        today: todayStr,
+        previousDay: lastDay || 'unknown',
+        suggestedActions: isNewDay ? ['synthesizeDiary', 'cleanupStaleTasks'] : []
+      };
+    }
   })
 };

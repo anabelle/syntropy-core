@@ -157,5 +157,73 @@ ${content}
         return { error: `Failed to write diary: ${error.message}` };
       }
     }
+  }),
+  synthesizeDiary: tool({
+    description: 'Compress and synthesize a large diary file into a high-value summary. Use this at the start of a new day for the PREVIOUS day\'s diary if it is large (>50KB). This prevents file bloat while preserving all evolutionary wisdom.',
+    inputSchema: z.object({
+      targetDate: z.string().describe('The date to synthesize in YYYY-MMM-DD format (e.g., "2026-Jan-04")'),
+    }),
+    execute: async ({ targetDate }) => {
+      console.log(`[SYNTROPY] Tool: synthesizeDiary (date=${targetDate})`);
+      try {
+        const diaryDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
+        const filename = `${targetDate}.md`;
+        const filePath = path.join(diaryDir, filename);
+
+        if (!fs.existsSync(filePath)) {
+          return { error: `Diary file for ${targetDate} not found at ${filePath}` };
+        }
+
+        const stats = await fs.stat(filePath);
+        const fileSizeKb = Math.round(stats.size / 1024);
+
+        console.log(`[SYNTROPY] Synthesizing ${filename} (${fileSizeKb} KB)`);
+
+        // Delegate to a worker for the actual synthesis
+        const task = `
+I need you to synthesize a large diary file for the date: ${targetDate}.
+
+FILE: /pixel/pixel-agent/docs/v1/diary/${filename}
+
+INSTRUCTIONS:
+1. Read the entire file.
+2. Produce a "High-Value Synthesis" block containing:
+   - **Executive Architecture Summary**: What evolved in the codebase?
+   - **Narrative Milestones**: Key identity shifts or realizations.
+   - **Action Items & Unresolved Threads**: What needs follow-up?
+   - **Sats & Economics**: Financial status/progress.
+3. Create a NEW file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md with this synthesis.
+4. Move the original large file to /pixel/pixel-agent/docs/v1/diary/archive/${filename}. Ensure the archive folder exists.
+5. Create a new /pixel/pixel-agent/docs/v1/diary/${filename} that ONLY contains:
+   - The original header.
+   - A clear link/pointer to the ${targetDate}-SYNTHESIS.md file.
+   - A note that the detailed logs are archived at /archive/${filename}.
+
+Verify the files are created and moved correctly.
+`;
+
+        const { spawnWorkerInternal } = await import('../worker-tools');
+        const workerResult = await spawnWorkerInternal({
+          task,
+          context: `Synthesizing large diary file (${fileSizeKb} KB) for ${targetDate}`,
+          priority: 'normal'
+        });
+
+        if ('error' in workerResult) {
+          return { error: `Failed to spawn synthesis worker: ${workerResult.error}` };
+        }
+
+        await logAudit({ type: 'diary_synthesis_started', date: targetDate, sizeKb: fileSizeKb, taskId: workerResult.taskId });
+
+        return {
+          success: true,
+          message: `Synthesis worker spawned for ${targetDate}. Original size: ${fileSizeKb} KB.`,
+          workerTaskId: workerResult.taskId
+        };
+      } catch (error: any) {
+        await logAudit({ type: 'diary_synthesis_error', error: error.message });
+        return { error: `Failed to synthesize diary: ${error.message}` };
+      }
+    }
   })
 };

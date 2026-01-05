@@ -147,6 +147,12 @@ async function runAutonomousCycle() {
       prompt: `Execute a full autonomous evolution cycle:
 
 
+PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
+1. MANDATORY: Check if it is the start of a new day via 'checkDailyReset'.
+2. If first cycle of the day AND previous diary is large (>50KB):
+   - Call 'synthesizeDiary' for the previous date.
+3. Clean up stale worker tasks via 'cleanupStaleTasks'.
+
 PHASE 1 - CONTEXT LOADING:
 1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
 2. Check Human Inbox for priority directives.
