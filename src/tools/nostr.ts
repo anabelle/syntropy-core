@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { PIXEL_ROOT } from '../config';
-import { logAudit } from '../utils';
+import { logAudit, getAgentContainerName } from '../utils';
 
 const execAsync = promisify(exec);
 
@@ -106,7 +106,7 @@ async function run() {
 run();
 `;
         const { stdout, stderr } = await execAsync(
-          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          `docker exec ${await getAgentContainerName()} bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
           { timeout: 20000 }
         );
 
@@ -212,7 +212,7 @@ async function run() {
 run();
 `;
         const { stdout, stderr } = await execAsync(
-          `docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          `docker exec ${await getAgentContainerName()} bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
           { timeout: 20000 }
         );
 

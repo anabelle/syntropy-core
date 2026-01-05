@@ -181,7 +181,7 @@ PHASE 2 - ECOSYSTEM AUDIT:
    - If disk > 85%: Run cleanup (docker prune, delete old backups)
    - If memory > 90%: Identify memory hogs in containerStats
    - If load > 1.5 per core: Check for runaway processes
-6. Read filtered agent logs via 'readAgentLogs'.
+6. Read filtered agent logs via 'readAgentLogs' or multi-service logs via 'getEcosystemLogs'.
 
 PHASE 3 - TASK EXECUTION:
 7. Execute any Human Inbox directives first.

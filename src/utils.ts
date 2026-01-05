@@ -6,6 +6,20 @@ import { PIXEL_ROOT, AUDIT_LOG_PATH } from './config';
 
 const execAsync = promisify(exec);
 
+export const getAgentContainerName = async (): Promise<string> => {
+  try {
+    const { stdout } = await execAsync('docker ps --filter "label=com.docker.compose.service=agent" --format "{{.Names}}"');
+    const name = stdout.trim();
+    if (name) {
+      // If multiple containers found (rare), take the first one
+      return name.split('\n')[0];
+    }
+    return 'pixel-agent-1'; // Fallback
+  } catch {
+    return 'pixel-agent-1';
+  }
+};
+
 const MAX_AUDIT_ENTRIES = 500;
 
 export const logAudit = async (entry: any) => {
