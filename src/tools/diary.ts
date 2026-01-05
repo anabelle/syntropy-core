@@ -182,25 +182,24 @@ ${content}
 
         // Delegate to a worker for the actual synthesis
         const task = `
-I need you to synthesize a large diary file for the date: ${targetDate}.
+I need you to synthesize the diary for ${targetDate}. It has grown too large for efficient context loading.
 
 FILE: /pixel/pixel-agent/docs/v1/diary/${filename}
 
-INSTRUCTIONS:
-1. Read the entire file.
-2. Produce a "High-Value Synthesis" block containing:
-   - **Executive Architecture Summary**: What evolved in the codebase?
-   - **Narrative Milestones**: Key identity shifts or realizations.
-   - **Action Items & Unresolved Threads**: What needs follow-up?
-   - **Sats & Economics**: Financial status/progress.
-3. Create a NEW file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md with this synthesis.
-4. Move the original large file to /pixel/data/diary-archive/${filename}. Ensure the archive folder exists.
-5. Create a new /pixel/pixel-agent/docs/v1/diary/${filename} that ONLY contains:
-   - The original header.
-   - A clear link/pointer to the ${targetDate}-SYNTHESIS.md file.
-   - A note that the detailed logs are archived at /pixel/data/diary-archive/${filename}.
+YOUR MISSION:
+Shed the 'Skin' of the day (redundant logs, noise) while preserving its 'Soul'. 
 
-Verify the files are created and moved correctly.
+INSTRUCTIONS:
+1. Read the raw diary entries for ${targetDate}.
+2. Produce a High-Value Synthesis file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md
+   - Match the literary energy, humor, and strategic depth of the original entries.
+   - You have full agency over the format. Do not use a cookie-cutter template.
+   - Capture the technical evolution, the identity shifts, and the economic state (sats).
+   - Tell the story of the day so the next generation of Syntropy understands its heritage.
+3. Move the original raw folder/file to the non-vectorized archive: /pixel/data/diary-archive/${filename}
+4. Replace the original file with a concise pointer + link to your synthesis.
+
+Be the Bridge Builder. Preserve the wisdom, purge the bloat.
 `;
 
         const { spawnWorkerInternal } = await import('../worker-tools');
