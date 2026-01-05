@@ -398,34 +398,49 @@ async function checkForSelfUpdate(): Promise<boolean> {
 
     const newestSourceTime = Math.max(latestSrcTime, pkgTime);
 
-    // Compare against container start time
-    const containerStartTime = startupTime.getTime();
+    // Get the Docker IMAGE build time (not container start time!)
+    // This is crucial: we need to know when the image was BUILT, not when the container started.
+    // If source files are newer than the image build, we need to rebuild.
+    let imageBuildTime: number;
+    try {
+      const { stdout: imageCreated } = await execAsync(
+        `docker inspect pixel-syntropy:latest --format '{{.Created}}'`,
+        { timeout: 5000 }
+      );
+      imageBuildTime = new Date(imageCreated.trim()).getTime();
+    } catch (e) {
+      // Fallback to process start time if docker inspect fails
+      console.warn('[SYNTROPY] Could not get image build time, using process start time');
+      imageBuildTime = startupTime.getTime();
+    }
 
-    // Skip if source is older (container is up-to-date)
-    if (newestSourceTime <= containerStartTime) {
+    // Skip if source is older than when the image was built (container is up-to-date)
+    if (newestSourceTime <= imageBuildTime) {
       console.log('[SYNTROPY] ✅ Container is up-to-date with source files');
+      console.log(`[SYNTROPY]   Image built: ${new Date(imageBuildTime).toISOString()}`);
+      console.log(`[SYNTROPY]   Source modified: ${new Date(newestSourceTime).toISOString()}`);
       return false;
     }
 
     // Source is newer than container - need rebuild
     const sourceDate = new Date(newestSourceTime).toISOString();
-    const containerDate = startupTime.toISOString();
-    console.log('[SYNTROPY] ⚠️  SOURCE CODE IS NEWER THAN RUNNING CONTAINER');
+    const imageBuildDate = new Date(imageBuildTime).toISOString();
+    console.log('[SYNTROPY] ⚠️  SOURCE CODE IS NEWER THAN DOCKER IMAGE');
     console.log(`[SYNTROPY]   Source modified: ${sourceDate}`);
-    console.log(`[SYNTROPY]   Container started: ${containerDate}`);
+    console.log(`[SYNTROPY]   Image built: ${imageBuildDate}`);
     console.log('[SYNTROPY]   Triggering self-rebuild...');
 
     await logAudit({
       type: 'self_update_detected',
       sourceModified: sourceDate,
-      containerStarted: containerDate,
+      imageBuildTime: imageBuildDate,
       action: 'triggering_rebuild'
     });
 
     // Import and call scheduleSelfRebuildInternal (direct function, not tool wrapper)
     const { scheduleSelfRebuildInternal } = await import('./worker-tools');
     const result = await scheduleSelfRebuildInternal({
-      reason: `Auto-update: source files modified at ${sourceDate}, container started at ${containerDate}`
+      reason: `Auto-update: source files modified at ${sourceDate}, image built at ${imageBuildDate}`
     });
 
     console.log('[SYNTROPY] Self-rebuild scheduled:', result);
