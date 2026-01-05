@@ -229,9 +229,9 @@ Do NOT write reports for routine health checks or status updates.`,
                         console.log(`[SYNTROPY] Pruned old evolution report: ${file}`);
                     }
                 }
-                const syntropyJsonPath = isDocker
-                    ? path.resolve(PIXEL_ROOT, 'audit/syntropy.json')
-                    : path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json');
+                // Always write to pixel-landing/public/syntropy.json - this is what the landing page serves
+                // The entire repo is mounted at /pixel in Docker, so the path works in both environments
+                const syntropyJsonPath = path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json');
                 await fs.writeJson(syntropyJsonPath, {
                     lastUpdate: new Date().toISOString(),
                     title,

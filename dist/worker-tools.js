@@ -546,11 +546,35 @@ export async function cleanupStaleTasksInternal(retentionDays = 7) {
     }
     ledger.tasks = tasksToKeep;
     await writeTaskLedger(ledger);
-    await logAudit({ type: 'worker_cleanup', aborted, removed });
+    // cleanup orphaned files (files with no task in ledger)
+    let orphaned = 0;
+    try {
+        const dataDir = path.join(PIXEL_ROOT, 'data');
+        if (await fs.pathExists(dataDir)) {
+            const files = await fs.readdir(dataDir);
+            const workerFiles = files.filter(f => f.startsWith('worker-output-') && f.endsWith('.txt'));
+            const activeTaskIds = new Set(ledger.tasks.map(t => t.id));
+            for (const file of workerFiles) {
+                // filename format: worker-output-{taskId}.txt
+                const taskId = file.replace('worker-output-', '').replace('.txt', '');
+                // If task is not in the active ledger, it's an orphan (or from a just-deleted task)
+                if (!activeTaskIds.has(taskId)) {
+                    // Double check it wasn't just removed above, though redundant delete is fine
+                    await fs.remove(path.join(dataDir, file));
+                    orphaned++;
+                }
+            }
+        }
+    }
+    catch (e) {
+        console.warn('[SYNTROPY] Orphaned file cleanup failed:', e);
+    }
+    await logAudit({ type: 'worker_cleanup', aborted, removed, orphaned });
     return {
         success: true,
         aborted,
         removed,
+        orphaned, // Add to return type
         remaining: ledger.tasks.length,
     };
 }
