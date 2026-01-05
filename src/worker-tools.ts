@@ -500,26 +500,11 @@ export async function scheduleSelfRebuildInternal(params: { reason: string; gitR
   const { reason, gitRef } = params;
   console.log(`[SYNTROPY] scheduleSelfRebuildInternal (reason=${reason})`)
 
-  // 1. Save current state to CONTINUITY.md
-  const existingContinuity = await fs.pathExists(CONTINUITY_PATH)
-    ? await fs.readFile(CONTINUITY_PATH, 'utf-8')
-    : '';
+  // NOTE: We intentionally do NOT modify CONTINUITY.md here.
+  // The file has anchors (<!-- SYNTROPY:PENDING -->, etc.) that dependent tools rely on.
+  // Prepending would break the format and corrupt those tools' ability to parse it.
+  // Rebuild info is logged to audit log instead.
 
-  const rebuildNote = `
-## Self-Rebuild Scheduled
-
-**Time**: ${new Date().toISOString()}
-**Reason**: ${reason}
-${gitRef ? `**Git Ref**: ${gitRef}` : ''}
-
-Previous context preserved below.
-
----
-
-${existingContinuity}
-`;
-
-  await fs.writeFile(CONTINUITY_PATH, rebuildNote);
   await logAudit({ type: 'syntropy_rebuild_scheduled', reason, gitRef });
 
   // 2. Create rebuild task

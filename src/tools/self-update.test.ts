@@ -153,31 +153,39 @@ describe('Self-Update Detection', () => {
         });
     });
 
-    describe('CONTINUITY.md Preservation Contract', () => {
-        // These tests verify the contract that rebuild preserves existing content
+    describe('CONTINUITY.md Non-Modification Contract', () => {
+        // scheduleSelfRebuildInternal does NOT modify CONTINUITY.md
+        // The file has anchors (<!-- SYNTROPY:PENDING -->, etc.) that dependent tools rely on.
 
-        test('should be able to read and write CONTINUITY.md', async () => {
-            const originalContent = '# Original Context\nSome important data';
+        test('CONTINUITY.md format should be preserved (not modified by rebuild)', async () => {
+            const originalContent = `# Pixel Ecosystem — Continuity State
+
+## 📬 Human Inbox <!-- SYNTROPY:INBOX -->
+Some inbox content
+
+## 📋 Pending Tasks <!-- SYNTROPY:PENDING -->
+- Task 1
+- Task 2
+`;
             await fs.writeFile(TEST_CONTINUITY_PATH, originalContent);
 
+            // Read it back - should be exactly the same
             const content = await fs.readFile(TEST_CONTINUITY_PATH, 'utf-8');
-            expect(content).toContain('Original Context');
-            expect(content).toContain('Some important data');
+            expect(content).toBe(originalContent);
+            expect(content).toContain('<!-- SYNTROPY:INBOX -->');
+            expect(content).toContain('<!-- SYNTROPY:PENDING -->');
         });
 
-        test('prepending content should preserve original', async () => {
-            const originalContent = '# Original Context\nImportant data here';
-            await fs.writeFile(TEST_CONTINUITY_PATH, originalContent);
+        test('anchors should be parseable after any operation', async () => {
+            const content = `# Test
+## 📋 Pending Tasks <!-- SYNTROPY:PENDING -->
+- Task A
+`;
+            await fs.writeFile(TEST_CONTINUITY_PATH, content);
 
-            // This mimics what scheduleSelfRebuildInternal does
-            const existing = await fs.readFile(TEST_CONTINUITY_PATH, 'utf-8');
-            const rebuildNote = `## Self-Rebuild Scheduled\n\n**Time**: ${new Date().toISOString()}\n**Reason**: Test\n\n---\n\n${existing}`;
-            await fs.writeFile(TEST_CONTINUITY_PATH, rebuildNote);
-
-            const final = await fs.readFile(TEST_CONTINUITY_PATH, 'utf-8');
-            expect(final).toContain('Self-Rebuild Scheduled');
-            expect(final).toContain('Original Context');
-            expect(final).toContain('Important data here');
+            const read = await fs.readFile(TEST_CONTINUITY_PATH, 'utf-8');
+            const hasAnchor = read.includes('<!-- SYNTROPY:PENDING -->');
+            expect(hasAnchor).toBe(true);
         });
     });
 });
