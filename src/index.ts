@@ -148,9 +148,10 @@ async function runAutonomousCycle() {
 
 
 PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
-1. MANDATORY: Check if it is the start of a new day via 'checkDailyReset'.
-2. If first cycle of the day AND previous diary is large (>50KB):
+1. MANDATORY: Check if this is the FIRST cycle of a new day via 'checkDailyReset'. This tool is stateful and will only signal 'isNewDay: true' once per 24 hours.
+2. If 'isNewDay' is true AND previous diary is large (>50KB):
    - Call 'synthesizeDiary' for the previous date.
+   - Note: Raw logs are moved to '/pixel/data/diary-archive' (outside /docs) to prevent vectorization bloat.
 3. Clean up stale worker tasks via 'cleanupStaleTasks'.
 
 PHASE 1 - CONTEXT LOADING:

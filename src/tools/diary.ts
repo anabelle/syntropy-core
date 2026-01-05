@@ -167,6 +167,7 @@ ${content}
       console.log(`[SYNTROPY] Tool: synthesizeDiary (date=${targetDate})`);
       try {
         const diaryDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
+        const archiveDir = path.resolve(PIXEL_ROOT, 'data/diary-archive');
         const filename = `${targetDate}.md`;
         const filePath = path.join(diaryDir, filename);
 
@@ -193,11 +194,11 @@ INSTRUCTIONS:
    - **Action Items & Unresolved Threads**: What needs follow-up?
    - **Sats & Economics**: Financial status/progress.
 3. Create a NEW file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md with this synthesis.
-4. Move the original large file to /pixel/pixel-agent/docs/v1/diary/archive/${filename}. Ensure the archive folder exists.
+4. Move the original large file to /pixel/data/diary-archive/${filename}. Ensure the archive folder exists.
 5. Create a new /pixel/pixel-agent/docs/v1/diary/${filename} that ONLY contains:
    - The original header.
    - A clear link/pointer to the ${targetDate}-SYNTHESIS.md file.
-   - A note that the detailed logs are archived at /archive/${filename}.
+   - A note that the detailed logs are archived at /pixel/data/diary-archive/${filename}.
 
 Verify the files are created and moved correctly.
 `;
