@@ -26,7 +26,23 @@ const healthServer = http.createServer((req, res) => {
             startedAt: startupTime.toISOString(),
             uptimeSeconds: Math.floor(uptimeMs / 1000),
             model: MODEL_NAME,
+            nextRun: nextRunTimeout ? 'scheduled' : 'running',
         }));
+    }
+    else if (req.url === '/wake') {
+        if (runningCycle) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'cycle_already_in_progress' }));
+        }
+        else {
+            console.log('[SYNTROPY] External wake-up signal received!');
+            if (nextRunTimeout)
+                clearTimeout(nextRunTimeout);
+            // Run immediately
+            runAutonomousCycle().catch(err => console.error('[SYNTROPY] Wake-up cycle failed:', err));
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'waking_up' }));
+        }
     }
     else {
         res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -128,6 +144,13 @@ async function runAutonomousCycle() {
             prompt: `Execute a full autonomous evolution cycle:
 
 
+PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
+1. MANDATORY: Check if this is the FIRST cycle of a new day via 'checkDailyReset'. This tool is stateful and will only signal 'isNewDay: true' once per 24 hours.
+2. If 'isNewDay' is true AND previous diary is large (>50KB):
+   - Call 'synthesizeDiary' for the previous date.
+   - Note: Raw logs are moved to '/pixel/data/diary-archive' (outside /docs) to prevent vectorization bloat.
+3. Clean up stale worker tasks via 'cleanupStaleTasks'.
+
 PHASE 1 - CONTEXT LOADING:
 1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
 2. Check Human Inbox for priority directives.
@@ -145,7 +168,7 @@ PHASE 2 - ECOSYSTEM AUDIT:
 
 PHASE 3 - TASK EXECUTION:
 7. Execute any Human Inbox directives first.
-8. Work on Active Focus or pick from Short-Term Tasks.
+8. Work on Active Focus, pick from Short-Term Tasks, or process HARVESTED TASKS from 'CONTINUITY.md'.
 9. If complex fixes needed, use 'spawnWorker' to delegate (check status with 'checkWorkerStatus').
    - Only ONE worker at a time. Workers run in isolated containers with guardrails.
 
@@ -169,12 +192,13 @@ PHASE 6 - NARRATIVE & STORYTELLING:
 
 PHASE 7 - IDEA GARDEN:
 18. Call 'tendIdeaGarden' with action='read' to see current seeds.
-19. If seeds exist: WATER one (add a thought/insight from this cycle's learnings).
-20. If you have a genuinely NEW idea: Try to PLANT. If blocked (similar exists), water the suggested seed instead.
-21. Periodically: Run action='consolidate' to find and merge duplicates.
+19. IF a seed has 5+ waterings: HARVEST it (this moves it to CONTINUITY.md as a pending task).
+20. ELSE IF seeds exist: WATER one (add a thought/insight from this cycle's learnings).
+21. IF you have a genuinely NEW idea: Try to PLANT. If blocked (similar exists), water the suggested seed instead.
+22. Periodically: Run action='consolidate' to find and merge duplicates.
 
 PHASE 8 - WRAP UP:
-22. Call 'scheduleNextRun' to decide when to wake up next.
+23. Call 'scheduleNextRun' to decide when to wake up next.
 
 IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with reports—if the recovery was epic, tell the story. If the architecture improved, explain the vision.`,
             // @ts-ignore - onStepFinish is supported but missing from types in this version

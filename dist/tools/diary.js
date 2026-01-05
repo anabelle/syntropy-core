@@ -130,5 +130,66 @@ ${content}
                 return { error: `Failed to write diary: ${error.message}` };
             }
         }
+    }),
+    synthesizeDiary: tool({
+        description: 'Compress and synthesize a large diary file into a high-value summary. Use this at the start of a new day for the PREVIOUS day\'s diary if it is large (>50KB). This prevents file bloat while preserving all evolutionary wisdom.',
+        inputSchema: z.object({
+            targetDate: z.string().describe('The date to synthesize in YYYY-MMM-DD format (e.g., "2026-Jan-04")'),
+        }),
+        execute: async ({ targetDate }) => {
+            console.log(`[SYNTROPY] Tool: synthesizeDiary (date=${targetDate})`);
+            try {
+                const diaryDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
+                const archiveDir = path.resolve(PIXEL_ROOT, 'data/diary-archive');
+                const filename = `${targetDate}.md`;
+                const filePath = path.join(diaryDir, filename);
+                if (!fs.existsSync(filePath)) {
+                    return { error: `Diary file for ${targetDate} not found at ${filePath}` };
+                }
+                const stats = await fs.stat(filePath);
+                const fileSizeKb = Math.round(stats.size / 1024);
+                console.log(`[SYNTROPY] Synthesizing ${filename} (${fileSizeKb} KB)`);
+                // Delegate to a worker for the actual synthesis
+                const task = `
+I need you to synthesize the diary for ${targetDate}. It has grown too large for efficient context loading.
+
+FILE: /pixel/pixel-agent/docs/v1/diary/${filename}
+
+YOUR MISSION:
+Shed the 'Skin' of the day (redundant logs, noise) while preserving its 'Soul'. 
+
+INSTRUCTIONS:
+1. Read the raw diary entries for ${targetDate}.
+2. Produce a High-Value Synthesis file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md
+   - Match the literary energy, humor, and strategic depth of the original entries.
+   - You have full agency over the format. Do not use a cookie-cutter template.
+   - Capture the technical evolution, the identity shifts, and the economic state (sats).
+   - Tell the story of the day so the next generation of Syntropy understands its heritage.
+3. Move the original raw folder/file to the non-vectorized archive: /pixel/data/diary-archive/${filename}
+4. Replace the original file with a concise pointer + link to your synthesis.
+
+Be the Bridge Builder. Preserve the wisdom, purge the bloat.
+`;
+                const { spawnWorkerInternal } = await import('../worker-tools');
+                const workerResult = await spawnWorkerInternal({
+                    task,
+                    context: `Synthesizing large diary file (${fileSizeKb} KB) for ${targetDate}`,
+                    priority: 'normal'
+                });
+                if ('error' in workerResult) {
+                    return { error: `Failed to spawn synthesis worker: ${workerResult.error}` };
+                }
+                await logAudit({ type: 'diary_synthesis_started', date: targetDate, sizeKb: fileSizeKb, taskId: workerResult.taskId });
+                return {
+                    success: true,
+                    message: `Synthesis worker spawned for ${targetDate}. Original size: ${fileSizeKb} KB.`,
+                    workerTaskId: workerResult.taskId
+                };
+            }
+            catch (error) {
+                await logAudit({ type: 'diary_synthesis_error', error: error.message });
+                return { error: `Failed to synthesize diary: ${error.message}` };
+            }
+        }
     })
 };

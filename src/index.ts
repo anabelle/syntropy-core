@@ -372,6 +372,74 @@ async function scheduleNextCycle() {
 }
 
 // ============================================
+// SELF-UPDATE DETECTION
+// ============================================
+// Checks if syntropy-core source files are newer than the running container.
+// If so, spawns a rebuild worker and exits gracefully (workers are not killed).
+
+async function checkForSelfUpdate(): Promise<boolean> {
+  const { exec } = require('child_process');
+  const { promisify } = require('util');
+  const execAsync = promisify(exec);
+
+  try {
+    // Get the latest modification time of any file in syntropy-core/src
+    const srcDir = path.join(PIXEL_ROOT, 'syntropy-core', 'src');
+    const { stdout: latestMtime } = await execAsync(
+      `find ${srcDir} -type f -name "*.ts" -printf "%T@\\n" | sort -rn | head -1`,
+      { cwd: PIXEL_ROOT }
+    );
+    const latestSrcTime = parseFloat(latestMtime.trim()) * 1000; // Unix timestamp to ms
+
+    // Also check package.json
+    const pkgPath = path.join(PIXEL_ROOT, 'syntropy-core', 'package.json');
+    const pkgStat = await fs.stat(pkgPath);
+    const pkgTime = pkgStat.mtimeMs;
+
+    const newestSourceTime = Math.max(latestSrcTime, pkgTime);
+
+    // Compare against container start time
+    const containerStartTime = startupTime.getTime();
+
+    // Skip if source is older (container is up-to-date)
+    if (newestSourceTime <= containerStartTime) {
+      console.log('[SYNTROPY] ✅ Container is up-to-date with source files');
+      return false;
+    }
+
+    // Source is newer than container - need rebuild
+    const sourceDate = new Date(newestSourceTime).toISOString();
+    const containerDate = startupTime.toISOString();
+    console.log('[SYNTROPY] ⚠️  SOURCE CODE IS NEWER THAN RUNNING CONTAINER');
+    console.log(`[SYNTROPY]   Source modified: ${sourceDate}`);
+    console.log(`[SYNTROPY]   Container started: ${containerDate}`);
+    console.log('[SYNTROPY]   Triggering self-rebuild...');
+
+    await logAudit({
+      type: 'self_update_detected',
+      sourceModified: sourceDate,
+      containerStarted: containerDate,
+      action: 'triggering_rebuild'
+    });
+
+    // Import and call scheduleSelfRebuildInternal (direct function, not tool wrapper)
+    const { scheduleSelfRebuildInternal } = await import('./worker-tools');
+    const result = await scheduleSelfRebuildInternal({
+      reason: `Auto-update: source files modified at ${sourceDate}, container started at ${containerDate}`
+    });
+
+    console.log('[SYNTROPY] Self-rebuild scheduled:', result);
+    await logAudit({ type: 'self_rebuild_triggered', result });
+
+    return true; // Signal that we should exit
+  } catch (e: any) {
+    console.warn('[SYNTROPY] Self-update check failed (continuing anyway):', e.message);
+    await logAudit({ type: 'self_update_check_failed', error: e.message });
+    return false;
+  }
+}
+
+// ============================================
 // STARTUP
 // ============================================
 // NOTE: Opencode verification removed - workers handle all Opencode execution
@@ -418,6 +486,18 @@ async function startup() {
   // Quick capability check (git, docker)
   // NOTE: Opencode not checked here - workers handle all Opencode execution
   await verifyCapabilities();
+
+  // Check if source files are newer than this container - trigger self-rebuild if so
+  const needsUpdate = await checkForSelfUpdate();
+  if (needsUpdate) {
+    console.log('[SYNTROPY] Self-rebuild worker spawned. Waiting for rebuild to complete...');
+    console.log('[SYNTROPY] This container will be replaced by the new version.');
+    // Keep the process alive briefly so the worker has time to start
+    // The worker will rebuild and restart this container
+    await new Promise(resolve => setTimeout(resolve, 30000));
+    console.log('[SYNTROPY] Exiting to allow rebuild worker to complete its job.');
+    process.exit(0);
+  }
 
   // Check if we should wait before running first cycle
   const schedule = await getNextScheduledRun();

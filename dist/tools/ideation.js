@@ -254,22 +254,42 @@ The garden enables ideas to mature over multiple cycles before becoming tasks.`,
 ${logContent.split('\n').map((l) => `  ${l}`).join('\n')}
  `;
                     // Move to Compost
+                    const timestamp = new Date().toISOString().split('T')[0];
                     const fullSeed = `### ${seedTitle}\n${seedContent}`;
                     garden = garden.replace(fullSeed, '');
-                    garden = garden.replace(/## 🍂 Compost\n/, `## 🍂 Compost\n\n${fullSeed.replace(/- \*\*Waterings\*\*: \d+/, '- **Waterings**: HARVESTED')}`);
+                    const harvestedSeed = fullSeed
+                        .replace(/- \*\*Waterings\*\*: \d+/, '- **Waterings**: HARVESTED')
+                        .replace(/- \*\*Log\*\*:\n/, `- **Log**:\n  - [${timestamp} ${author}] HARVESTED: Moved to CONTINUITY.md\n`);
+                    garden = garden.replace(/## 🍂 Compost\n/, `## 🍂 Compost\n\n${harvestedSeed}`);
+                    // Safeguard: Limit compost to 5 items
+                    const compostMatchH = garden.match(/## 🍂 Compost([\s\S]*)/);
+                    if (compostMatchH) {
+                        const compostContent = compostMatchH[1];
+                        const headers = [...compostContent.matchAll(/\n### /g)];
+                        if (headers.length > 5 && headers[5].index !== undefined) {
+                            garden = garden.replace(compostContent, compostContent.slice(0, headers[5].index));
+                        }
+                    }
+                    garden = garden.replace(/\n{3,}/g, '\n\n');
                     await fs.writeFile(IDEAS_PATH, garden);
-                    // Update CONTINUITY.md - be more flexible with section headers
+                    // Update CONTINUITY.md - RESISTANT TO STOCHASTIC HEADER CHANGES
                     let continuity = await fs.readFile(CONTINUITY_PATH, 'utf-8');
-                    if (continuity.includes('## 📬 Pending Tasks')) {
-                        continuity = continuity.replace(/## 📬 Pending Tasks\n(?:\n)?/, `## 📬 Pending Tasks\n\n${taskEntry}\n`);
+                    // Strategy 1: Look for the invariant anchor (Best Practice)
+                    const PENDING_ANCHOR = '<!-- SYNTROPY:PENDING -->';
+                    if (continuity.includes(PENDING_ANCHOR)) {
+                        continuity = continuity.replace(PENDING_ANCHOR, `${PENDING_ANCHOR}\n\n${taskEntry}`);
                     }
+                    // Strategy 2: Fuzzy matching for common headers (Resilience)
+                    else if (continuity.match(/[#]{2,3}\s*.*(?:Pending|Tasks|Actions).*/i)) {
+                        continuity = continuity.replace(/([#]{2,3}\s*.*(?:Pending|Tasks|Actions).*\n)/i, `$1\n${taskEntry}\n`);
+                    }
+                    // Strategy 3: Specific fallbacks (Legacy Support)
                     else if (continuity.includes('## 🎯 IMMEDIATE NEXT ACTIONS')) {
-                        // Fallback: place before next actions
-                        continuity = continuity.replace(/## 🎯 IMMEDIATE NEXT ACTIONS/, `## 📬 Pending Tasks\n\n${taskEntry}\n\n## 🎯 IMMEDIATE NEXT ACTIONS`);
+                        continuity = continuity.replace(/## 🎯 IMMEDIATE NEXT ACTIONS/, `## � Pending Tasks\n\n${taskEntry}\n\n## 🎯 IMMEDIATE NEXT ACTIONS`);
                     }
+                    // Strategy 4: Append at the end (Emergency)
                     else {
-                        // Append to end
-                        continuity += `\n\n## 📬 Pending Tasks\n\n${taskEntry}\n`;
+                        continuity += `\n\n## 📬 Pending Tasks ${PENDING_ANCHOR}\n\n${taskEntry}\n`;
                     }
                     await fs.writeFile(CONTINUITY_PATH, continuity);
                     await logAudit({ type: 'idea_garden_harvest', seedTitle, waterings });
@@ -291,10 +311,10 @@ ${logContent.split('\n').map((l) => `  ${l}`).join('\n')}
                     garden = garden.replace(/## 🍂 Compost\n/, `## 🍂 Compost\n\n${updatedSeed}`);
                     const compostMatchC = garden.match(/## 🍂 Compost([\s\S]*)/);
                     if (compostMatchC) {
-                        const content = compostMatchC[1];
-                        const headers = [...content.matchAll(/\n### /g)];
+                        const compostContent = compostMatchC[1];
+                        const headers = [...compostContent.matchAll(/\n### /g)];
                         if (headers.length > 5 && headers[5].index !== undefined) {
-                            garden = garden.replace(content, content.slice(0, headers[5].index));
+                            garden = garden.replace(compostContent, compostContent.slice(0, headers[5].index));
                         }
                     }
                     garden = garden.replace(/\n{3,}/g, '\n\n');

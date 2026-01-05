@@ -482,14 +482,30 @@ WARNING: Current Syntropy process will be replaced during this operation.`,
   }),
 
   execute: async ({ reason, gitRef }) => {
-    console.log(`[SYNTROPY] Tool: scheduleSelfRebuild (reason=${reason})`);
+    return scheduleSelfRebuildInternal({ reason, gitRef });
+  }
+});
 
-    // 1. Save current state to CONTINUITY.md
-    const existingContinuity = await fs.pathExists(CONTINUITY_PATH)
-      ? await fs.readFile(CONTINUITY_PATH, 'utf-8')
-      : '';
+/**
+ * Internal function to schedule self-rebuild. Can be called directly from other modules.
+ */
+export async function scheduleSelfRebuildInternal(params: { reason: string; gitRef?: string }): Promise<{
+  scheduled?: boolean;
+  taskId: string;
+  containerName?: string;
+  message?: string;
+  warning?: string;
+  error?: string;
+}> {
+  const { reason, gitRef } = params;
+  console.log(`[SYNTROPY] scheduleSelfRebuildInternal (reason=${reason})`)
 
-    const rebuildNote = `
+  // 1. Save current state to CONTINUITY.md
+  const existingContinuity = await fs.pathExists(CONTINUITY_PATH)
+    ? await fs.readFile(CONTINUITY_PATH, 'utf-8')
+    : '';
+
+  const rebuildNote = `
 ## Self-Rebuild Scheduled
 
 **Time**: ${new Date().toISOString()}
@@ -503,23 +519,23 @@ Previous context preserved below.
 ${existingContinuity}
 `;
 
-    await fs.writeFile(CONTINUITY_PATH, rebuildNote);
-    await logAudit({ type: 'syntropy_rebuild_scheduled', reason, gitRef });
+  await fs.writeFile(CONTINUITY_PATH, rebuildNote);
+  await logAudit({ type: 'syntropy_rebuild_scheduled', reason, gitRef });
 
-    // 2. Create rebuild task
-    const taskId = crypto.randomUUID();
-    const ledger = await readTaskLedger();
+  // 2. Create rebuild task
+  const taskId = crypto.randomUUID();
+  const ledger = await readTaskLedger();
 
-    // HOST_PIXEL_ROOT for docker compose --project-directory
-    const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
+  // HOST_PIXEL_ROOT for docker compose --project-directory
+  const hostPixelRoot = process.env.HOST_PIXEL_ROOT || PIXEL_ROOT;
 
-    const rebuildTask: Task = {
-      id: taskId,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      type: 'syntropy-rebuild',  // Special type - bypasses guardrails
-      payload: {
-        task: `
+  const rebuildTask: Task = {
+    id: taskId,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    type: 'syntropy-rebuild',  // Special type - bypasses guardrails
+    payload: {
+      task: `
 SYNTROPY SELF-REBUILD PROTOCOL
 ==============================
 Reason: ${reason}
@@ -556,70 +572,69 @@ Steps:
 The new Syntropy will read CONTINUITY.md to restore context.
 The health endpoint is available at http://syntropy:3000/health inside the Docker network.
         `,
-        context: `Self-rebuild triggered at ${new Date().toISOString()}. Reason: ${reason}`
-      },
-      attempts: 0,
-      maxAttempts: 1, // Self-rebuild should not auto-retry
-    };
+      context: `Self-rebuild triggered at ${new Date().toISOString()}. Reason: ${reason}`
+    },
+    attempts: 0,
+    maxAttempts: 1, // Self-rebuild should not auto-retry
+  };
 
-    ledger.tasks.push(rebuildTask);
-    await writeTaskLedger(ledger);
+  ledger.tasks.push(rebuildTask);
+  await writeTaskLedger(ledger);
 
-    // 3. Spawn the rebuild worker
-    const containerName = `pixel-worker-rebuild-${taskId.slice(0, 8)}`;
+  // 3. Spawn the rebuild worker
+  const containerName = `pixel-worker-rebuild-${taskId.slice(0, 8)}`;
 
-    console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
+  console.log(`[SYNTROPY] Spawning self-rebuild worker: ${containerName}`);
 
-    const cleanup = await cleanupExitedWorkerContainers();
-    if (cleanup.attempted > 0) {
-      console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
-    }
-
-
+  const cleanup = await cleanupExitedWorkerContainers();
+  if (cleanup.attempted > 0) {
+    console.log(`[SYNTROPY] Cleaned up exited worker containers: removed=${cleanup.removed}/${cleanup.attempted}`);
+  }
 
 
-    const proc = spawn('docker', [
-      'compose', '--profile', 'worker',
-      'run', '-d',
-      '--name', containerName,
-      // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
-      '-e', `TASK_ID=${taskId}`,
-      '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
-      'worker'
-    ], { cwd: PIXEL_ROOT });
 
-    let spawnError = '';
-    proc.stderr.on('data', (d) => { spawnError += d.toString(); });
 
-    const spawnResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ success: true });
-        } else {
-          resolve({ success: false, error: spawnError });
-        }
-      });
-      proc.on('error', (e) => {
-        resolve({ success: false, error: e.message });
-      });
+  const proc = spawn('docker', [
+    'compose', '--profile', 'worker',
+    'run', '-d',
+    '--name', containerName,
+    // NOTE: containers are intentionally retained while running; exited ones are cleaned up automatically.
+    '-e', `TASK_ID=${taskId}`,
+    '-e', `HOST_PIXEL_ROOT=${hostPixelRoot}`,
+    'worker'
+  ], { cwd: PIXEL_ROOT });
+
+  let spawnError = '';
+  proc.stderr.on('data', (d) => { spawnError += d.toString(); });
+
+  const spawnResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true });
+      } else {
+        resolve({ success: false, error: spawnError });
+      }
     });
+    proc.on('error', (e) => {
+      resolve({ success: false, error: e.message });
+    });
+  });
 
-    if (!spawnResult.success) {
-      return {
-        error: `Failed to spawn rebuild worker: ${spawnResult.error}`,
-        taskId,
-      };
-    }
-
+  if (!spawnResult.success) {
     return {
-      scheduled: true,
+      error: `Failed to spawn rebuild worker: ${spawnResult.error}`,
       taskId,
-      containerName,
-      message: `Self-rebuild scheduled (task ${taskId.slice(0, 8)}). Syntropy will be restarted when the worker executes. State has been saved to CONTINUITY.md.`,
-      warning: 'Current Syntropy process will be replaced. This is expected behavior.',
     };
   }
-});
+
+  return {
+    scheduled: true,
+    taskId,
+    containerName,
+    message: `Self-rebuild scheduled (task ${taskId.slice(0, 8)}). Syntropy will be restarted when the worker executes. State has been saved to CONTINUITY.md.`,
+    warning: 'Current Syntropy process will be replaced. This is expected behavior.',
+  };
+}
 
 /**
  * Internal function to cleanup stale tasks (callable directly without tool wrapper)

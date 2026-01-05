@@ -65,9 +65,9 @@ export const readContinuity = tool({
     }
 });
 export const updateContinuity = tool({
-    description: 'Update the Continuity Ledger. Use this whenever the goal, constraints, key decisions, or progress state change.',
+    description: 'Update the Continuity Ledger (CONTINUITY.md). Use this whenever the goal, constraints, key decisions, or progress state change. CRITICAL: You MUST preserve all <!-- SYNTROPY:XXX --> anchors (e.g., SYNTROPY:PENDING) as they are used by automated tools to sync data.',
     inputSchema: z.object({
-        content: z.string().describe('The full updated content of CONTINUITY.md. Maintain the standard headings.')
+        content: z.string().describe('The full updated content of CONTINUITY.md. Maintain the standard headings and ALWAYS preserve the <!-- SYNTROPY:XXX --> markers.')
     }),
     execute: async ({ content }) => {
         console.log('[SYNTROPY] Tool: updateContinuity');
