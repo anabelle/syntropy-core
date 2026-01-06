@@ -17,6 +17,29 @@ import { PIXEL_ROOT } from './config';
 import { logAudit } from './utils';
 
 // ============================================
+// WORKER EVENT STORE TYPES
+// ============================================
+
+export interface WorkerEvent {
+  id: string;
+  taskId: string;
+  containerName: string;
+  eventType: 'spawn' | 'complete' | 'failed' | 'aborted';
+  timestamp: string;
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+  spawnTime?: string;
+  completionTime?: string;
+  buildDurationMs?: number;
+  error?: string;
+  exitCode?: number;
+}
+
+export interface WorkerEventStore {
+  version: number;
+  events: WorkerEvent[];
+}
+
+// ============================================
 // TASK LEDGER TYPES
 // ============================================
 
@@ -58,6 +81,66 @@ export interface TaskLedger {
 const LEDGER_PATH = path.join(PIXEL_ROOT, 'data', 'task-ledger.json');
 const CONTINUITY_PATH = path.join(PIXEL_ROOT, 'CONTINUITY.md');
 const WORKER_LOCK_PATH = path.join(PIXEL_ROOT, 'data', 'worker-lock.json');
+const WORKER_EVENTS_PATH = path.join(PIXEL_ROOT, 'data', 'worker-events.json');
+
+async function readWorkerEvents(): Promise<WorkerEventStore> {
+  try {
+    if (await fs.pathExists(WORKER_EVENTS_PATH)) {
+      const content = await fs.readFile(WORKER_EVENTS_PATH, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (e) {
+    console.error('[WORKER EVENTS] Error reading worker events:', e);
+  }
+  return { version: 1, events: [] };
+}
+
+async function writeWorkerEvents(store: WorkerEventStore): Promise<void> {
+  await fs.ensureDir(path.dirname(WORKER_EVENTS_PATH));
+  const tempPath = `${WORKER_EVENTS_PATH}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(store, null, 2));
+  await fs.rename(tempPath, WORKER_EVENTS_PATH);
+}
+
+async function recordWorkerEvent(event: Omit<WorkerEvent, 'id' | 'timestamp'>): Promise<WorkerEvent> {
+  const store = await readWorkerEvents();
+  const fullEvent: WorkerEvent = {
+    ...event,
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    timestamp: new Date().toISOString()
+  };
+  store.events.push(fullEvent);
+  await writeWorkerEvents(store);
+  console.log(`[WORKER EVENTS] Recorded: ${fullEvent.eventType} for task ${fullEvent.taskId}`);
+  return fullEvent;
+}
+
+export async function detectHealingWorkers(): Promise<{ healing: WorkerEvent[]; active: WorkerEvent[] }> {
+  const store = await readWorkerEvents();
+  const HEALING_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes
+
+  const now = Date.now();
+  const active: WorkerEvent[] = [];
+  const healing: WorkerEvent[] = [];
+
+  for (const event of store.events) {
+    if (event.eventType === 'spawn' && event.status === 'running') {
+      const eventTime = new Date(event.timestamp).getTime();
+      const elapsed = now - eventTime;
+
+      active.push(event);
+
+      if (elapsed > HEALING_THRESHOLD_MS) {
+        healing.push({
+          ...event,
+          buildDurationMs: elapsed
+        });
+      }
+    }
+  }
+
+  return { healing, active };
+}
 
 async function getRunningWorkerContainers(): Promise<string[]> {
   return new Promise((resolve) => {
@@ -273,6 +356,15 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   // Update lock to track the real taskId (worker will clear this lock when it exits)
   await fs.writeFile(WORKER_LOCK_PATH, JSON.stringify({ taskId, createdAt: new Date().toISOString() }, null, 2));
 
+  // Record spawn event for visibility
+  await recordWorkerEvent({
+    taskId,
+    containerName,
+    eventType: 'spawn',
+    status: 'pending',
+    spawnTime: new Date().toISOString()
+  });
+
   // 3. Spawn worker container
   const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
 
@@ -376,6 +468,25 @@ Use this to monitor workers spawned with spawnWorker.`,
       return { error: `Task ${taskId} not found in ledger` };
     }
 
+    // Record running event if task just started
+    if (task.status === 'running') {
+      const store = await readWorkerEvents();
+      const hasRunningEvent = store.events.some(e => e.taskId === taskId && e.eventType === 'spawn' && e.status === 'running');
+
+      if (!hasRunningEvent) {
+        const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
+        const spawnEvent = store.events.find(e => e.taskId === taskId && e.eventType === 'spawn');
+
+        await recordWorkerEvent({
+          taskId,
+          containerName,
+          eventType: 'spawn',
+          status: 'running',
+          spawnTime: spawnEvent?.spawnTime || task.startedAt
+        });
+      }
+    }
+
     // If running, check if container still exists
     if (task.status === 'running' && task.workerId) {
       const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
@@ -383,6 +494,7 @@ Use this to monitor workers spawned with spawnWorker.`,
 
       if (!containerStatus.exists || containerStatus.exited) {
         // Container died - update ledger
+        const previousStatus = task.status;
         task.status = containerStatus.exitCode === 0 ? 'completed' : 'failed';
         task.exitCode = containerStatus.exitCode;
         task.completedAt = new Date().toISOString();
@@ -402,6 +514,27 @@ Use this to monitor workers spawned with spawnWorker.`,
 
         await writeTaskLedger(ledger);
         await logAudit({ type: 'worker_status_updated', taskId, status: task.status, exitCode: task.exitCode });
+
+        // Record completion/failure event for visibility
+        const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
+        if (previousStatus !== 'completed' && previousStatus !== 'failed') {
+          const eventType: 'complete' | 'failed' = task.status === 'completed' ? 'complete' : 'failed';
+          const store = await readWorkerEvents();
+          const spawnEvent = store.events.find(e => e.taskId === taskId && e.eventType === 'spawn');
+
+          await recordWorkerEvent({
+            taskId,
+            containerName,
+            eventType,
+            status: task.status,
+            spawnTime: spawnEvent?.spawnTime,
+            completionTime: task.completedAt,
+            buildDurationMs: spawnEvent?.spawnTime
+              ? new Date(task.completedAt!).getTime() - new Date(spawnEvent.spawnTime).getTime()
+              : undefined,
+            exitCode: task.exitCode
+          });
+        }
       }
     }
 
@@ -808,4 +941,11 @@ export const workerTools = {
   scheduleSelfRebuild,
   cleanupStaleTasks,
   readWorkerLogs,
+};
+
+// Export event store functions for tests (not already exported)
+export {
+  readWorkerEvents,
+  writeWorkerEvents,
+  recordWorkerEvent,
 };

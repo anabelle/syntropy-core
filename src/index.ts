@@ -19,7 +19,7 @@ import { ContextEngine } from './context-engine';
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3000', 10);
 const startupTime = new Date();
 
-const healthServer = http.createServer((req, res) => {
+const healthServer = http.createServer(async (req, res) => {
   if (req.url === '/health' || req.url === '/') {
     const uptimeMs = Date.now() - startupTime.getTime();
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -43,6 +43,38 @@ const healthServer = http.createServer((req, res) => {
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'waking_up' }));
+    }
+  } else if (req.url === '/worker/status') {
+    try {
+      const { detectHealingWorkers } = await import('./worker-tools');
+      const { healing, active } = await detectHealingWorkers();
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        healing: healing.map(e => ({
+          taskId: e.taskId,
+          containerName: e.containerName,
+          spawnedAt: e.spawnTime,
+          runningDurationMs: e.buildDurationMs,
+          runningDurationMinutes: Math.round((e.buildDurationMs || 0) / 60000),
+          status: 'HEALING'
+        })),
+        active: active.map(e => ({
+          taskId: e.taskId,
+          containerName: e.containerName,
+          spawnedAt: e.spawnTime,
+          status: 'RUNNING'
+        })),
+        summary: {
+          healingCount: healing.length,
+          activeCount: active.length,
+          threshold: '20 minutes'
+        }
+      }));
+    } catch (error: any) {
+      console.error('[SYNTROPY] Worker status endpoint error:', error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
     }
   } else {
     res.writeHead(404, { 'Content-Type': 'application/json' });

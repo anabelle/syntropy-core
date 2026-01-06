@@ -10,6 +10,7 @@
     "build": "tsc",
     "lint": "eslint src/**",
     "test": "bun test",
+    "test:worker-logging": "bun test src/tools/worker-logging.test.ts",
     "prepare": "husky"
   },
   "dependencies": {
