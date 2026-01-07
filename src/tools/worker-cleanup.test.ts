@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { cleanupStaleTasksInternal } from '../worker-tools.ts';
+import { cleanupStaleTasksInternal } from '../worker-core.ts';
 import { PIXEL_ROOT } from '../config';
 
 // Define the TaskLedger interface locally to match the source

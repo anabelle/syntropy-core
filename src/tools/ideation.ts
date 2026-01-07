@@ -440,7 +440,7 @@ ${logContent.split('\n').map((l: string) => `  ${l}`).join('\n')}
             return { error: "Both 'seedTitle' and 'content' (research query) are required" };
           }
 
-          const { spawnWorkerInternal } = await import('../worker-tools');
+          const { spawnWorkerInternal } = await import('../worker-core');
 
           const researchTask = `RESEARCH TASK for Idea Garden seed: "${seedTitle}"
 

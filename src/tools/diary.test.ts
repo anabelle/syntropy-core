@@ -5,7 +5,7 @@ import * as path from 'path';
 import { PIXEL_ROOT } from '../config';
 
 // Mock dependencies
-mock.module('../worker-tools', () => ({
+mock.module('../worker-core', () => ({
     spawnWorkerInternal: async (params: any) => ({
         taskId: 'test-task-id',
         containerName: 'test-worker',

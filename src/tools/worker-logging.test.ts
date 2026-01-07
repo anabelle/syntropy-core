@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { readWorkerEvents, detectHealingWorkers } from '../worker-tools.ts';
+import { readWorkerEvents, detectHealingWorkers } from '../worker-core.ts';
 
 describe('Worker Event Logging', () => {
   it('should read worker events from file', async () => {

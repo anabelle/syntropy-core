@@ -46,7 +46,7 @@ const healthServer = http.createServer(async (req, res) => {
     }
   } else if (req.url === '/worker/status') {
     try {
-      const { detectHealingWorkers } = await import('./worker-tools');
+      const { detectHealingWorkers } = await import('./worker-core');
       const { healing, active } = await detectHealingWorkers();
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -333,7 +333,7 @@ IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with re
 
     // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
     try {
-      const { cleanupStaleTasksInternal } = await import('./worker-tools');
+      const { cleanupStaleTasksInternal } = await import('./worker-core');
       const result = await cleanupStaleTasksInternal(3);
       if (result.removed > 0 || result.aborted > 0) {
         console.log(`[SYNTROPY] Cleaned up ${result.removed} old tasks, ${result.aborted} stale tasks`);
@@ -471,7 +471,7 @@ async function checkForSelfUpdate(): Promise<boolean> {
     });
 
     // Import and call scheduleSelfRebuildInternal (direct function, not tool wrapper)
-    const { scheduleSelfRebuildInternal } = await import('./worker-tools');
+    const { scheduleSelfRebuildInternal } = await import('./worker-core');
     const result = await scheduleSelfRebuildInternal({
       reason: `Auto-update: source files modified at ${sourceDate}, image built at ${imageBuildDate}`
     });

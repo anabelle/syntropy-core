@@ -205,7 +205,7 @@ IMPORTANT: After you finish, update /pixel/REFACTOR_QUEUE.md:
 - Update "**Last Processed**:" with current timestamp and task ID`;
 
           // Use the worker tools directly
-          const { spawnWorkerInternal } = await import('../worker-tools');
+          const { spawnWorkerInternal } = await import('../worker-core');
           const workerResult = await spawnWorkerInternal({
             task: workerTask,
             context: `Refactoring task from REFACTOR_QUEUE.md. Task ID: ${taskId}`,

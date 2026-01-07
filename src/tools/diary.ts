@@ -202,7 +202,7 @@ INSTRUCTIONS:
 Be the Bridge Builder. Preserve the wisdom, purge the bloat.
 `;
 
-        const { spawnWorkerInternal } = await import('../worker-tools');
+        const { spawnWorkerInternal } = await import('../worker-core');
         const workerResult = await spawnWorkerInternal({
           task,
           context: `Synthesizing large diary file (${fileSizeKb} KB) for ${targetDate}`,

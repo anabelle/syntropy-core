@@ -24,7 +24,7 @@ mock.module("../utils", () => ({
 }));
 
 // Mock worker tools to avoid spawning real workers during tests
-mock.module("../worker-tools", () => ({
+mock.module("../worker-core", () => ({
     spawnWorkerInternal: () => Promise.resolve({ taskId: "test-task-123" })
 }));
 
