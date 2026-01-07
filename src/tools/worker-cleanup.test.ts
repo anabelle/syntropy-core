@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:te
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as WorkerCore from '../worker-core.ts';
+console.log('WorkerCore Exports:', Object.keys(WorkerCore));
 const { cleanupStaleTasksInternal } = WorkerCore;
 import { PIXEL_ROOT } from '../config';
 
