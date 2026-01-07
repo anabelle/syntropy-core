@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test';
-import { readWorkerEvents, detectHealingWorkers } from '../worker-core.ts';
+import * as WorkerCore from '../worker-core.ts';
+const { readWorkerEvents, detectHealingWorkers } = WorkerCore;
 
 describe('Worker Event Logging', () => {
   it('should read worker events from file', async () => {
