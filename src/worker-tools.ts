@@ -83,7 +83,7 @@ const CONTINUITY_PATH = path.join(PIXEL_ROOT, 'CONTINUITY.md');
 const WORKER_LOCK_PATH = path.join(PIXEL_ROOT, 'data', 'worker-lock.json');
 const WORKER_EVENTS_PATH = path.join(PIXEL_ROOT, 'data', 'worker-events.json');
 
-async function readWorkerEvents(): Promise<WorkerEventStore> {
+export async function readWorkerEvents(): Promise<WorkerEventStore> {
   try {
     if (await fs.pathExists(WORKER_EVENTS_PATH)) {
       const content = await fs.readFile(WORKER_EVENTS_PATH, 'utf-8');
@@ -95,14 +95,14 @@ async function readWorkerEvents(): Promise<WorkerEventStore> {
   return { version: 1, events: [] };
 }
 
-async function writeWorkerEvents(store: WorkerEventStore): Promise<void> {
+export async function writeWorkerEvents(store: WorkerEventStore): Promise<void> {
   await fs.ensureDir(path.dirname(WORKER_EVENTS_PATH));
   const tempPath = `${WORKER_EVENTS_PATH}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(store, null, 2));
   await fs.rename(tempPath, WORKER_EVENTS_PATH);
 }
 
-async function recordWorkerEvent(event: Omit<WorkerEvent, 'id' | 'timestamp'>): Promise<WorkerEvent> {
+export async function recordWorkerEvent(event: Omit<WorkerEvent, 'id' | 'timestamp'>): Promise<WorkerEvent> {
   const store = await readWorkerEvents();
   const fullEvent: WorkerEvent = {
     ...event,
@@ -941,11 +941,4 @@ export const workerTools = {
   scheduleSelfRebuild,
   cleanupStaleTasks,
   readWorkerLogs,
-};
-
-// Export event store functions for tests (not already exported)
-export {
-  readWorkerEvents,
-  writeWorkerEvents,
-  recordWorkerEvent,
 };
