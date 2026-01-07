@@ -518,14 +518,14 @@ Use this to monitor workers spawned with spawnWorker.`,
         // Record completion/failure event for visibility
         const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
         // previousStatus was 'running' (from line 492 condition), so always record the event
-        const eventType: 'complete' | 'failed' = task.status === 'completed' ? 'complete' : 'failed';
+        const finalEventType: 'complete' | 'failed' = task.status === 'completed' ? 'complete' : 'failed';
         const store = await readWorkerEvents();
         const spawnEvent = store.events.find(e => e.taskId === taskId && e.eventType === 'spawn');
 
         await recordWorkerEvent({
           taskId,
           containerName,
-          eventType,
+          eventType: finalEventType,
           status: task.status,
           spawnTime: spawnEvent?.spawnTime,
           completionTime: task.completedAt,
