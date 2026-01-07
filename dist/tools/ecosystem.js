@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as http from 'http';
-import { PIXEL_ROOT, LOG_PATH } from '../config';
+import { PIXEL_ROOT } from '../config';
 import { logAudit } from '../utils';
 const execAsync = promisify(exec);
 // Helper to fetch JSON from HTTP endpoint with timeout
@@ -148,83 +148,108 @@ not just that their containers are running.`,
         execute: async ({ lines }) => {
             console.log(`[SYNTROPY] Tool: readAgentLogs (${lines} lines)`);
             try {
-                if (fs.existsSync(LOG_PATH)) {
-                    const { stdout: rawLogs } = await execAsync(`tail -n ${lines * 5} ${LOG_PATH}`, { timeout: 10000 });
-                    const logLines = rawLogs.toString().split('\n');
-                    const filteredLines = logLines.filter(line => {
-                        const lowerLine = line.toLowerCase();
-                        if (line.includes('[REFLECTION]') ||
-                            line.includes('[LORE]') ||
-                            line.includes('[ZAP]') ||
-                            line.includes('[DM]') ||
-                            line.includes('[NOSTR] Replied to') ||
-                            line.includes('[NOSTR] Reacted to')) {
-                            return true;
-                        }
-                        if (lowerLine.includes('too many concurrent reqs'))
-                            return false;
-                        if (lowerLine.includes('drizzleadapter creatememory'))
-                            return false;
-                        if (lowerLine.includes('creating memory id='))
-                            return false;
-                        if (lowerLine.includes('connection healthy, last event received'))
-                            return false;
-                        if (lowerLine.includes('stats:') && lowerLine.includes('calls saved'))
-                            return false;
-                        if (lowerLine.includes('invalid iv length'))
-                            return false;
-                        if (lowerLine.includes('skipping old mention'))
-                            return false;
-                        if (lowerLine.includes('event kind 1 from'))
-                            return false;
-                        if (lowerLine.includes('debug'))
-                            return false;
-                        if (lowerLine.includes('notice from'))
-                            return false;
-                        if (lowerLine.includes('bad req:'))
-                            return false;
-                        if (lowerLine.includes('discovery skipping muted user'))
-                            return false;
-                        if (lowerLine.includes('timeline lore processing deferred'))
-                            return false;
-                        if (lowerLine.includes('llm generation attempt') && lowerLine.includes('failed'))
-                            return false;
-                        if (lowerLine.includes('all llm generation retries failed'))
-                            return false;
-                        if (lowerLine.includes('round') && lowerLine.includes('metrics:'))
-                            return false;
-                        if (lowerLine.includes('adaptive threshold activated'))
-                            return false;
-                        if (lowerLine.includes('continuing to round'))
-                            return false;
-                        if (lowerLine.includes('discovery round'))
-                            return false;
-                        if (lowerLine.includes('round topics (fallback):'))
-                            return false;
-                        if (lowerLine.includes('expanded search params:'))
-                            return false;
-                        if (lowerLine.includes('discovery "') && lowerLine.includes('": relevant'))
-                            return false;
-                        if (lowerLine.includes('generating text with'))
-                            return false;
-                        if (/\b[0-9a-f]{8}\b/.test(line))
-                            return false;
-                        if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
-                            if (line.length > 500)
-                                return false;
-                        }
-                        if (!line.trim())
-                            return false;
+                const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines * 5} --no-color --no-log-prefix agent`, { timeout: 15000, cwd: PIXEL_ROOT });
+                const logLines = rawLogs.toString().split('\n');
+                const filteredLines = logLines.filter(line => {
+                    const lowerLine = line.toLowerCase();
+                    if (line.includes('[REFLECTION]') ||
+                        line.includes('[LORE]') ||
+                        line.includes('[ZAP]') ||
+                        line.includes('[DM]') ||
+                        line.includes('[NOSTR] Replied to') ||
+                        line.includes('[NOSTR] Reacted to')) {
                         return true;
-                    });
-                    const result = filteredLines.slice(-lines).join('\n');
-                    await logAudit({ type: 'logs_read', lines, filtered: true });
-                    return result || "No relevant logs found after filtering.";
-                }
-                return "Log file not found";
+                    }
+                    if (lowerLine.includes('too many concurrent reqs'))
+                        return false;
+                    if (lowerLine.includes('drizzleadapter creatememory'))
+                        return false;
+                    if (lowerLine.includes('creating memory id='))
+                        return false;
+                    if (lowerLine.includes('connection healthy, last event received'))
+                        return false;
+                    if (lowerLine.includes('stats:') && lowerLine.includes('calls saved'))
+                        return false;
+                    if (lowerLine.includes('invalid iv length'))
+                        return false;
+                    if (lowerLine.includes('skipping old mention'))
+                        return false;
+                    if (lowerLine.includes('event kind 1 from'))
+                        return false;
+                    if (lowerLine.includes('debug'))
+                        return false;
+                    if (lowerLine.includes('notice from'))
+                        return false;
+                    if (lowerLine.includes('bad req:'))
+                        return false;
+                    if (lowerLine.includes('discovery skipping muted user'))
+                        return false;
+                    if (lowerLine.includes('timeline lore processing deferred'))
+                        return false;
+                    if (lowerLine.includes('llm generation attempt') && lowerLine.includes('failed'))
+                        return false;
+                    if (lowerLine.includes('all llm generation retries failed'))
+                        return false;
+                    if (lowerLine.includes('round') && lowerLine.includes('metrics:'))
+                        return false;
+                    if (lowerLine.includes('adaptive threshold activated'))
+                        return false;
+                    if (lowerLine.includes('continuing to round'))
+                        return false;
+                    if (lowerLine.includes('discovery round'))
+                        return false;
+                    if (lowerLine.includes('round topics (fallback):'))
+                        return false;
+                    if (lowerLine.includes('expanded search params:'))
+                        return false;
+                    if (lowerLine.includes('discovery "') && lowerLine.includes('": relevant'))
+                        return false;
+                    if (lowerLine.includes('generating text with'))
+                        return false;
+                    if (/\b[0-9a-f]{8}\b/.test(line))
+                        return false;
+                    if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
+                        if (line.length > 500)
+                            return false;
+                    }
+                    if (!line.trim())
+                        return false;
+                    return true;
+                });
+                const result = filteredLines.slice(-lines).join('\n');
+                await logAudit({ type: 'logs_read', lines, filtered: true });
+                return result || "No relevant logs found after filtering.";
             }
             catch (error) {
                 return { error: error.message };
+            }
+        }
+    }),
+    getEcosystemLogs: tool({
+        description: 'Read recent logs from multiple ecosystem services. Useful for debugging cross-service interactions.',
+        inputSchema: z.object({
+            services: z.array(z.string()).optional().describe('List of services to get logs for (e.g. ["api", "agent", "postgres"]). Defaults to all active services if omitted.'),
+            lines: z.number().optional().default(30).describe('Number of lines to read per service (default: 30)')
+        }),
+        execute: async ({ services, lines = 30 }) => {
+            console.log(`[SYNTROPY] Tool: getEcosystemLogs (${lines} lines/service)`);
+            try {
+                // 1. Determine which services to query
+                let servicesToQuery = services;
+                if (!servicesToQuery || servicesToQuery.length === 0) {
+                    const { stdout } = await execAsync('docker compose ps --format "{{.Service}}"', { timeout: 10000, cwd: PIXEL_ROOT });
+                    servicesToQuery = stdout.trim().split('\n').filter(s => s && s !== 'syntropy'); // Exclude self to avoid log spam
+                }
+                // 2. Fetch logs using docker compose (handles prefixes and interleaving)
+                const serviceFlags = servicesToQuery.join(' ');
+                const { stdout: rawLogs } = await execAsync(`docker compose logs --tail ${lines} --no-color ${serviceFlags}`, { timeout: 20000, cwd: PIXEL_ROOT });
+                const logs = rawLogs.toString().trim();
+                await logAudit({ type: 'ecosystem_logs_read', services: servicesToQuery, lines });
+                return logs || "No logs found for the specified services.";
+            }
+            catch (error) {
+                await logAudit({ type: 'ecosystem_logs_error', error: error.message });
+                return { error: `Failed to fetch ecosystem logs: ${error.message}` };
             }
         }
     }),

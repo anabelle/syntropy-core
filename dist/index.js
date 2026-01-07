@@ -16,7 +16,7 @@ import { ContextEngine } from './context-engine';
 // Used by the self-rebuild worker to verify syntropy started successfully.
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3000', 10);
 const startupTime = new Date();
-const healthServer = http.createServer((req, res) => {
+const healthServer = http.createServer(async (req, res) => {
     if (req.url === '/health' || req.url === '/') {
         const uptimeMs = Date.now() - startupTime.getTime();
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -42,6 +42,39 @@ const healthServer = http.createServer((req, res) => {
             runAutonomousCycle().catch(err => console.error('[SYNTROPY] Wake-up cycle failed:', err));
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ status: 'waking_up' }));
+        }
+    }
+    else if (req.url === '/worker/status') {
+        try {
+            const { detectHealingWorkers } = await import('./worker-tools');
+            const { healing, active } = await detectHealingWorkers();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                healing: healing.map(e => ({
+                    taskId: e.taskId,
+                    containerName: e.containerName,
+                    spawnedAt: e.spawnTime,
+                    runningDurationMs: e.buildDurationMs,
+                    runningDurationMinutes: Math.round((e.buildDurationMs || 0) / 60000),
+                    status: 'HEALING'
+                })),
+                active: active.map(e => ({
+                    taskId: e.taskId,
+                    containerName: e.containerName,
+                    spawnedAt: e.spawnTime,
+                    status: 'RUNNING'
+                })),
+                summary: {
+                    healingCount: healing.length,
+                    activeCount: active.length,
+                    threshold: '20 minutes'
+                }
+            }));
+        }
+        catch (error) {
+            console.error('[SYNTROPY] Worker status endpoint error:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error.message }));
         }
     }
     else {
@@ -154,6 +187,7 @@ PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
 PHASE 1 - CONTEXT LOADING:
 1. MANDATORY: Read 'CONTINUITY.md' via 'readContinuity' to load session memory.
 2. Check Human Inbox for priority directives.
+3. OPTIONAL: Use 'viewRecentCommits' if you need context on what changed recently (useful after waking from long sleep or debugging issues).
 
 PHASE 2 - ECOSYSTEM AUDIT:
 3. Audit ecosystem health via 'getEcosystemStatus'.
@@ -164,7 +198,7 @@ PHASE 2 - ECOSYSTEM AUDIT:
    - If disk > 85%: Run cleanup (docker prune, delete old backups)
    - If memory > 90%: Identify memory hogs in containerStats
    - If load > 1.5 per core: Check for runaway processes
-6. Read filtered agent logs via 'readAgentLogs'.
+6. Read filtered agent logs via 'readAgentLogs' or multi-service logs via 'getEcosystemLogs'.
 
 PHASE 3 - TASK EXECUTION:
 7. Execute any Human Inbox directives first.
@@ -345,6 +379,73 @@ async function scheduleNextCycle() {
     nextRunTimeout = setTimeout(runAutonomousCycle, delayMs);
 }
 // ============================================
+// SELF-UPDATE DETECTION
+// ============================================
+// Checks if syntropy-core source files are newer than the running container.
+// If so, spawns a rebuild worker and exits gracefully (workers are not killed).
+async function checkForSelfUpdate() {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    try {
+        // Get the latest modification time of any file in syntropy-core/src
+        const srcDir = path.join(PIXEL_ROOT, 'syntropy-core', 'src');
+        const { stdout: latestMtime } = await execAsync(`find ${srcDir} -type f -name "*.ts" -printf "%T@\\n" | sort -rn | head -1`, { cwd: PIXEL_ROOT });
+        const latestSrcTime = parseFloat(latestMtime.trim()) * 1000; // Unix timestamp to ms
+        // Also check package.json
+        const pkgPath = path.join(PIXEL_ROOT, 'syntropy-core', 'package.json');
+        const pkgStat = await fs.stat(pkgPath);
+        const pkgTime = pkgStat.mtimeMs;
+        const newestSourceTime = Math.max(latestSrcTime, pkgTime);
+        // Get the Docker IMAGE build time (not container start time!)
+        // This is crucial: we need to know when the image was BUILT, not when the container started.
+        // If source files are newer than the image build, we need to rebuild.
+        let imageBuildTime;
+        try {
+            const { stdout: imageCreated } = await execAsync(`docker inspect pixel-syntropy:latest --format '{{.Created}}'`, { timeout: 5000 });
+            imageBuildTime = new Date(imageCreated.trim()).getTime();
+        }
+        catch (e) {
+            // Fallback to process start time if docker inspect fails
+            console.warn('[SYNTROPY] Could not get image build time, using process start time');
+            imageBuildTime = startupTime.getTime();
+        }
+        // Skip if source is older than when the image was built (container is up-to-date)
+        if (newestSourceTime <= imageBuildTime) {
+            console.log('[SYNTROPY] ✅ Container is up-to-date with source files');
+            console.log(`[SYNTROPY]   Image built: ${new Date(imageBuildTime).toISOString()}`);
+            console.log(`[SYNTROPY]   Source modified: ${new Date(newestSourceTime).toISOString()}`);
+            return false;
+        }
+        // Source is newer than container - need rebuild
+        const sourceDate = new Date(newestSourceTime).toISOString();
+        const imageBuildDate = new Date(imageBuildTime).toISOString();
+        console.log('[SYNTROPY] ⚠️  SOURCE CODE IS NEWER THAN DOCKER IMAGE');
+        console.log(`[SYNTROPY]   Source modified: ${sourceDate}`);
+        console.log(`[SYNTROPY]   Image built: ${imageBuildDate}`);
+        console.log('[SYNTROPY]   Triggering self-rebuild...');
+        await logAudit({
+            type: 'self_update_detected',
+            sourceModified: sourceDate,
+            imageBuildTime: imageBuildDate,
+            action: 'triggering_rebuild'
+        });
+        // Import and call scheduleSelfRebuildInternal (direct function, not tool wrapper)
+        const { scheduleSelfRebuildInternal } = await import('./worker-tools');
+        const result = await scheduleSelfRebuildInternal({
+            reason: `Auto-update: source files modified at ${sourceDate}, image built at ${imageBuildDate}`
+        });
+        console.log('[SYNTROPY] Self-rebuild scheduled:', result);
+        await logAudit({ type: 'self_rebuild_triggered', result });
+        return true; // Signal that we should exit
+    }
+    catch (e) {
+        console.warn('[SYNTROPY] Self-update check failed (continuing anyway):', e.message);
+        await logAudit({ type: 'self_update_check_failed', error: e.message });
+        return false;
+    }
+}
+// ============================================
 // STARTUP
 // ============================================
 // NOTE: Opencode verification removed - workers handle all Opencode execution
@@ -385,6 +486,17 @@ async function startup() {
     // Quick capability check (git, docker)
     // NOTE: Opencode not checked here - workers handle all Opencode execution
     await verifyCapabilities();
+    // Check if source files are newer than this container - trigger self-rebuild if so
+    const needsUpdate = await checkForSelfUpdate();
+    if (needsUpdate) {
+        console.log('[SYNTROPY] Self-rebuild worker spawned. Waiting for rebuild to complete...');
+        console.log('[SYNTROPY] This container will be replaced by the new version.');
+        // Keep the process alive briefly so the worker has time to start
+        // The worker will rebuild and restart this container
+        await new Promise(resolve => setTimeout(resolve, 30000));
+        console.log('[SYNTROPY] Exiting to allow rebuild worker to complete its job.');
+        process.exit(0);
+    }
     // Check if we should wait before running first cycle
     const schedule = await getNextScheduledRun();
     if (schedule) {

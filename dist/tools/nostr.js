@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { PIXEL_ROOT } from '../config';
-import { logAudit } from '../utils';
+import { logAudit, getAgentContainerName } from '../utils';
 const execAsync = promisify(exec);
 export const nostrTools = {
     postToNostr: tool({
@@ -99,7 +99,7 @@ async function run() {
 }
 run();
 `;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 20000 });
+                const { stdout, stderr } = await execAsync(`docker exec ${await getAgentContainerName()} bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 20000 });
                 if (stderr && stderr.includes('ERROR:')) {
                     return { error: stderr };
                 }
@@ -198,7 +198,7 @@ async function run() {
 }
 run();
 `;
-                const { stdout, stderr } = await execAsync(`docker exec pixel-agent-1 bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 20000 });
+                const { stdout, stderr } = await execAsync(`docker exec ${await getAgentContainerName()} bun -e "${script.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 20000 });
                 if (stderr && stderr.includes('ERROR:')) {
                     return { error: stderr };
                 }

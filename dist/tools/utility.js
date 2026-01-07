@@ -214,5 +214,79 @@ The reason you provide becomes the commit message - make it descriptive!`,
                 suggestedActions: isNewDay ? ['synthesizeDiary', 'cleanupStaleTasks'] : []
             };
         }
+    }),
+    viewRecentCommits: tool({
+        description: `View recent git commits from the main repository and/or submodules. Use this for context when you need to understand recent changes to the codebase.
+
+WHEN TO USE:
+- At the start of a session to understand what changed recently
+- Before making changes to understand the current state
+- When debugging to see what was recently modified
+- To get context on what you or workers have done recently
+
+Returns commit hashes, authors, dates, and messages for easy scanning.`,
+        inputSchema: z.object({
+            count: z.number().optional().describe('Number of commits to show per repo (default: 5, max: 20)'),
+            includeSubmodules: z.boolean().optional().describe('Whether to include submodule commits (default: true)'),
+            repos: z.array(z.enum(['main', 'lnpixels', 'pixel-agent', 'pixel-landing', 'syntropy-core'])).optional()
+                .describe('Specific repos to show. If not provided, shows all.')
+        }),
+        execute: async ({ count = 5, includeSubmodules = true, repos }) => {
+            console.log(`[SYNTROPY] Tool: viewRecentCommits (count=${count}, submodules=${includeSubmodules})`);
+            const maxCount = Math.min(Math.max(count, 1), 20);
+            // Single quotes are critical - shell interprets %an etc. as commands without them
+            const format = `--pretty=format:'%h|%an|%ar|%s'`;
+            const submodulePaths = {
+                'lnpixels': path.join(PIXEL_ROOT, 'lnpixels'),
+                'pixel-agent': path.join(PIXEL_ROOT, 'pixel-agent'),
+                'pixel-landing': path.join(PIXEL_ROOT, 'pixel-landing'),
+                'syntropy-core': path.join(PIXEL_ROOT, 'syntropy-core')
+            };
+            const parseCommits = (output) => {
+                return output.trim().split('\n').filter(Boolean).map(line => {
+                    const [hash, author, when, ...messageParts] = line.split('|');
+                    return { hash, author, when, message: messageParts.join('|') };
+                });
+            };
+            const results = {};
+            // Determine which repos to include
+            const targetRepos = repos || (includeSubmodules
+                ? ['main', 'lnpixels', 'pixel-agent', 'pixel-landing', 'syntropy-core']
+                : ['main']);
+            try {
+                // Main repo commits
+                if (targetRepos.includes('main')) {
+                    try {
+                        const { stdout } = await execAsync(`git log -n ${maxCount} ${format}`, { cwd: PIXEL_ROOT });
+                        results['main'] = parseCommits(stdout);
+                    }
+                    catch (e) {
+                        results['main'] = { error: e.message };
+                    }
+                }
+                // Submodule commits
+                for (const [name, repoPath] of Object.entries(submodulePaths)) {
+                    if (!targetRepos.includes(name))
+                        continue;
+                    try {
+                        if (fs.existsSync(repoPath)) {
+                            const { stdout } = await execAsync(`git log -n ${maxCount} ${format}`, { cwd: repoPath });
+                            results[name] = parseCommits(stdout);
+                        }
+                        else {
+                            results[name] = { error: 'Submodule not found' };
+                        }
+                    }
+                    catch (e) {
+                        results[name] = { error: e.message };
+                    }
+                }
+                await logAudit({ type: 'view_commits', repos: Object.keys(results), count: maxCount });
+                return results;
+            }
+            catch (error) {
+                return { error: `Failed to get commits: ${error.message}` };
+            }
+        }
     })
 };

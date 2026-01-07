@@ -356,6 +356,9 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
   // Update lock to track the real taskId (worker will clear this lock when it exits)
   await fs.writeFile(WORKER_LOCK_PATH, JSON.stringify({ taskId, createdAt: new Date().toISOString() }, null, 2));
 
+  // 3. Generate container name and spawn worker container
+  const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
+
   // Record spawn event for visibility
   await recordWorkerEvent({
     taskId,
@@ -365,8 +368,6 @@ export async function spawnWorkerInternal(params: SpawnWorkerParams): Promise<Sp
     spawnTime: new Date().toISOString()
   });
 
-  // 3. Spawn worker container
-  const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
 
   console.log(`[SYNTROPY] Spawning worker container: ${containerName}`);
 
@@ -494,7 +495,6 @@ Use this to monitor workers spawned with spawnWorker.`,
 
       if (!containerStatus.exists || containerStatus.exited) {
         // Container died - update ledger
-        const previousStatus = task.status;
         task.status = containerStatus.exitCode === 0 ? 'completed' : 'failed';
         task.exitCode = containerStatus.exitCode;
         task.completedAt = new Date().toISOString();
@@ -517,24 +517,23 @@ Use this to monitor workers spawned with spawnWorker.`,
 
         // Record completion/failure event for visibility
         const containerName = `pixel-worker-${taskId.slice(0, 8)}`;
-        if (previousStatus !== 'completed' && previousStatus !== 'failed') {
-          const eventType: 'complete' | 'failed' = task.status === 'completed' ? 'complete' : 'failed';
-          const store = await readWorkerEvents();
-          const spawnEvent = store.events.find(e => e.taskId === taskId && e.eventType === 'spawn');
+        // previousStatus was 'running' (from line 492 condition), so always record the event
+        const eventType: 'complete' | 'failed' = task.status === 'completed' ? 'complete' : 'failed';
+        const store = await readWorkerEvents();
+        const spawnEvent = store.events.find(e => e.taskId === taskId && e.eventType === 'spawn');
 
-          await recordWorkerEvent({
-            taskId,
-            containerName,
-            eventType,
-            status: task.status,
-            spawnTime: spawnEvent?.spawnTime,
-            completionTime: task.completedAt,
-            buildDurationMs: spawnEvent?.spawnTime
-              ? new Date(task.completedAt!).getTime() - new Date(spawnEvent.spawnTime).getTime()
-              : undefined,
-            exitCode: task.exitCode
-          });
-        }
+        await recordWorkerEvent({
+          taskId,
+          containerName,
+          eventType,
+          status: task.status,
+          spawnTime: spawnEvent?.spawnTime,
+          completionTime: task.completedAt,
+          buildDurationMs: spawnEvent?.spawnTime
+            ? new Date(task.completedAt!).getTime() - new Date(spawnEvent.spawnTime).getTime()
+            : undefined,
+          exitCode: task.exitCode
+        });
       }
     }
 

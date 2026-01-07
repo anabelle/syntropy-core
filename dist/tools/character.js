@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { PIXEL_ROOT, PIXEL_AGENT_DIR, CHARACTER_DIR } from '../config';
-import { logAudit, syncAll } from '../utils';
+import { logAudit, syncAll, getAgentContainerName } from '../utils';
 const execAsync = promisify(exec);
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
 const CONTINUITY_PATH = isDocker
@@ -44,9 +44,10 @@ export const characterTools = {
             let oldContent = "";
             // Helper: wait for agent health
             const waitForAgentHealth = async (maxAttempts = 10, delayMs = 3000) => {
+                const agentContainer = await getAgentContainerName();
                 for (let i = 0; i < maxAttempts; i++) {
                     try {
-                        const { stdout } = await execAsync('docker inspect --format="{{.State.Health.Status}}" pixel-agent-1', { timeout: 5000 });
+                        const { stdout } = await execAsync(`docker inspect --format="{{.State.Health.Status}}" ${agentContainer}`, { timeout: 5000 });
                         const status = stdout.trim();
                         if (status === 'healthy') {
                             console.log(`[SYNTROPY] Agent healthy after ${i + 1} checks`);
@@ -60,7 +61,7 @@ export const characterTools = {
                     catch {
                         // Container might not have healthcheck, check if running
                         try {
-                            const { stdout } = await execAsync('docker inspect --format="{{.State.Running}}" pixel-agent-1', { timeout: 5000 });
+                            const { stdout } = await execAsync(`docker inspect --format="{{.State.Running}}" ${agentContainer}`, { timeout: 5000 });
                             if (stdout.trim() === 'true') {
                                 // Give it a moment to stabilize
                                 await new Promise(r => setTimeout(r, delayMs));
@@ -86,11 +87,12 @@ export const characterTools = {
                     return { error: 'Pre-flight failed: Docker is not accessible. Cannot proceed with mutation.' };
                 }
                 // 1b. Check agent container exists
+                const agentContainer = await getAgentContainerName();
                 try {
-                    const { stdout } = await execAsync('docker ps -a --filter name=pixel-agent-1 --format "{{.Names}}"', { timeout: 5000 });
-                    if (!stdout.includes('pixel-agent-1')) {
+                    const { stdout } = await execAsync(`docker ps -a --filter name=${agentContainer} --format "{{.Names}}"`, { timeout: 5000 });
+                    if (!stdout.includes(agentContainer)) {
                         await logAudit({ type: 'mutation_preflight_fail', file, error: 'Agent container not found' });
-                        return { error: 'Pre-flight failed: pixel-agent-1 container not found.' };
+                        return { error: `Pre-flight failed: ${agentContainer} container not found.` };
                     }
                 }
                 catch {
@@ -142,7 +144,7 @@ export const characterTools = {
                     // === RESTART WITH HEALTH CHECK ===
                     // 7. Restart agent
                     console.log('[SYNTROPY] Restarting agent...');
-                    await execAsync('docker restart pixel-agent-1', { timeout: 30000 });
+                    await execAsync(`docker restart ${agentContainer}`, { timeout: 30000 });
                     // 8. Wait for agent to become healthy
                     console.log('[SYNTROPY] Waiting for agent health...');
                     const isHealthy = await waitForAgentHealth(15, 2000); // 15 attempts, 2s each = 30s max
@@ -167,7 +169,7 @@ export const characterTools = {
                         // Try to restart with old content
                         try {
                             await execAsync('bun run build', { cwd: PIXEL_AGENT_DIR, timeout: 180000 });
-                            await execAsync('docker restart pixel-agent-1', { timeout: 30000 });
+                            await execAsync(`docker restart ${agentContainer}`, { timeout: 30000 });
                             await waitForAgentHealth(10, 2000);
                         }
                         catch (restoreErr) {
