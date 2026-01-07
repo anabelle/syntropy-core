@@ -254,7 +254,8 @@ Returns commit hashes, authors, dates, and messages for easy scanning.`,
       console.log(`[SYNTROPY] Tool: viewRecentCommits (count=${count}, submodules=${includeSubmodules})`);
 
       const maxCount = Math.min(Math.max(count, 1), 20);
-      const format = '--pretty=format:%h|%an|%ar|%s';
+      // Single quotes are critical - shell interprets %an etc. as commands without them
+      const format = `--pretty=format:'%h|%an|%ar|%s'`;
 
       const submodulePaths: Record<string, string> = {
         'lnpixels': path.join(PIXEL_ROOT, 'lnpixels'),
