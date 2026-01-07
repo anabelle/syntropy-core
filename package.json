@@ -9,7 +9,7 @@
     "start": "bun src/index.ts",
     "build": "tsc",
     "lint": "eslint src/**",
-    "test": "bun test",
+    "test": "bun test src/",
     "test:worker-logging": "bun test src/tools/worker-logging.test.ts",
     "prepare": "husky"
   },
