@@ -76,6 +76,54 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
       }
     } as const;
 
+    const isNonFastForward = (error: any): boolean => {
+      const combined = `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`.toLowerCase();
+      return (
+        combined.includes('non-fast-forward') ||
+        combined.includes('fetch first') ||
+        combined.includes('rejected') && combined.includes('non-fast-forward')
+      );
+    };
+
+    const isRebaseInProgress = (repoPath: string): boolean => {
+      try {
+        const gitDir = fs.existsSync(path.join(repoPath, '.git'))
+          ? path.join(repoPath, '.git')
+          : repoPath;
+        return (
+          fs.existsSync(path.join(gitDir, 'rebase-apply')) ||
+          fs.existsSync(path.join(gitDir, 'rebase-merge'))
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    const attemptRebaseOntoOrigin = async (repoPath: string, branchHint?: string) => {
+      const defaultBranch = branchHint || await getDefaultBranch(repoPath);
+      if (isRebaseInProgress(repoPath)) {
+        console.warn(`[SYNTROPY] Rebase already in progress in ${path.basename(repoPath)}; skipping rebase.`);
+        return;
+      }
+
+      try {
+        await execAsync('git fetch origin --prune', { cwd: repoPath, ...execOpts });
+      } catch {
+        // ignore
+      }
+
+      const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath, ...execOpts });
+      const branch = branchRaw.trim();
+
+      if (branch === 'HEAD') {
+        // Detached HEAD: rebase current commits onto origin/defaultBranch
+        await execAsync(`git rebase origin/${defaultBranch}`, { cwd: repoPath, ...execOpts });
+      } else {
+        // On a branch: rebase onto upstream while stashing local working changes if needed
+        await execAsync(`git pull --rebase --autostash origin ${branch}`, { cwd: repoPath, ...execOpts });
+      }
+    };
+
     const isNothingToCommit = (error: any): boolean => {
       const combined = `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`.toLowerCase();
       return (
@@ -254,13 +302,32 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
           const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo, ...execOpts });
           const branch = branchRaw.trim();
 
-          if (branch === 'HEAD') {
-            const defaultBranch = await getDefaultBranch(repo);
-            await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: repo, ...execOpts });
-            // Move detached HEAD onto the default branch after a successful push
-            await execAsync(`git checkout -B ${defaultBranch} origin/${defaultBranch}`, { cwd: repo, ...execOpts }).catch(() => { });
-          } else {
-            await execAsync(`git push origin ${branch}`, { cwd: repo, ...execOpts });
+          const doPush = async () => {
+            if (branch === 'HEAD') {
+              const defaultBranch = await getDefaultBranch(repo);
+              await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: repo, ...execOpts });
+              // Move detached HEAD onto the default branch after a successful push
+              await execAsync(`git checkout -B ${defaultBranch} origin/${defaultBranch}`, { cwd: repo, ...execOpts }).catch(() => { });
+            } else {
+              await execAsync(`git push origin ${branch}`, { cwd: repo, ...execOpts });
+            }
+          };
+
+          try {
+            await doPush();
+          } catch (e: any) {
+            if (isNonFastForward(e)) {
+              console.warn(`[SYNTROPY] Push rejected for ${submodule}; rebasing and retrying once...`);
+              try {
+                await attemptRebaseOntoOrigin(repo);
+                await doPush();
+              } catch (rebaseErr: any) {
+                console.warn(`[SYNTROPY] Retry failed for ${submodule}: ${(rebaseErr?.stderr || rebaseErr?.message || '').toString().trim()}`);
+                throw rebaseErr;
+              }
+            } else {
+              throw e;
+            }
           }
 
           console.log(`[SYNTROPY] Pushed ${submodule}`);
@@ -302,11 +369,25 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
       try {
         const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: PIXEL_ROOT, ...execOpts });
         const branch = branchRaw.trim();
-        if (branch === 'HEAD') {
-          const defaultBranch = await getDefaultBranch(PIXEL_ROOT);
-          await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: PIXEL_ROOT, ...execOpts });
-        } else {
-          await execAsync(`git push origin ${branch}`, { cwd: PIXEL_ROOT, ...execOpts });
+        const doPush = async () => {
+          if (branch === 'HEAD') {
+            const defaultBranch = await getDefaultBranch(PIXEL_ROOT);
+            await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: PIXEL_ROOT, ...execOpts });
+          } else {
+            await execAsync(`git push origin ${branch}`, { cwd: PIXEL_ROOT, ...execOpts });
+          }
+        };
+
+        try {
+          await doPush();
+        } catch (e: any) {
+          if (isNonFastForward(e)) {
+            console.warn('[SYNTROPY] Parent push rejected; rebasing and retrying once...');
+            await attemptRebaseOntoOrigin(PIXEL_ROOT, branch === 'HEAD' ? undefined : branch);
+            await doPush();
+          } else {
+            throw e;
+          }
         }
         console.log('[SYNTROPY] Pushed parent repo');
       } catch (e: any) {
