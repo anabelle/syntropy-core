@@ -64,9 +64,92 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
     ];
 
     // Configure git for container environment
-    const ghToken = process.env.GH_TOKEN;
+    const ghToken = process.env.GH_TOKEN?.trim();
     if (!ghToken) {
       console.warn('[SYNTROPY] GH_TOKEN not set - git push will fail');
+    }
+
+    const execOpts = {
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0'
+      }
+    } as const;
+
+    const isNothingToCommit = (error: any): boolean => {
+      const combined = `${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`.toLowerCase();
+      return (
+        combined.includes('nothing to commit') ||
+        combined.includes('no changes added to commit') ||
+        combined.includes('working tree clean')
+      );
+    };
+
+    const getDefaultBranch = async (repoPath: string): Promise<string> => {
+      try {
+        const { stdout } = await execAsync('git symbolic-ref refs/remotes/origin/HEAD', { cwd: repoPath, ...execOpts });
+        const ref = stdout.trim();
+        const parts = ref.split('/');
+        const last = parts[parts.length - 1];
+        if (last) return last;
+      } catch {
+        // ignore
+      }
+
+      try {
+        const { stdout } = await execAsync('git remote show origin', { cwd: repoPath, ...execOpts });
+        const match = stdout.match(/HEAD branch:\s*(.+)\s*$/m);
+        if (match?.[1]) return match[1].trim();
+      } catch {
+        // ignore
+      }
+
+      for (const candidate of ['main', 'master']) {
+        try {
+          await execAsync(`git show-ref --verify --quiet refs/remotes/origin/${candidate}`,
+            { cwd: repoPath, ...execOpts }
+          );
+          return candidate;
+        } catch {
+          // ignore
+        }
+      }
+
+      return 'main';
+    };
+
+    const ensureGitHubHttpsPush = async (repoPath: string) => {
+      if (!ghToken) return;
+      try {
+        const { stdout: pushUrlRaw } = await execAsync('git remote get-url --push origin', { cwd: repoPath, ...execOpts });
+        const pushUrl = pushUrlRaw.trim();
+        if (!pushUrl) return;
+
+        let httpsUrl: string | null = null;
+        if (pushUrl.startsWith('git@github.com:')) {
+          httpsUrl = `https://github.com/${pushUrl.slice('git@github.com:'.length)}`;
+        } else if (pushUrl.startsWith('ssh://git@github.com/')) {
+          httpsUrl = `https://github.com/${pushUrl.slice('ssh://git@github.com/'.length)}`;
+        }
+
+        if (httpsUrl) {
+          await execAsync(`git remote set-url --push origin ${httpsUrl}`, { cwd: repoPath, ...execOpts });
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    // Ensure commits succeed even in fresh containers
+    await execAsync('git config --global user.name "Syntropy Bot"', execOpts).catch(() => { });
+    await execAsync('git config --global user.email "syntropy@pixel.xx.kg"', execOpts).catch(() => { });
+
+    // Configure GitHub HTTPS auth when GH_TOKEN is present.
+    // This avoids SSH deploy-key failures and makes pushes work across all repos.
+    if (ghToken) {
+      const basicAuth = Buffer.from(`x-access-token:${ghToken}`).toString('base64');
+      const header = `AUTHORIZATION: basic ${basicAuth}`;
+      await execAsync(`git config --global http.https://github.com/.extraheader "${header}"`, execOpts).catch(() => { });
     }
 
     // Generate commit message based on context
@@ -147,32 +230,42 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
         if (!fs.existsSync(path.join(repo, '.git'))) continue;
 
         // Mark directory as safe
-        await execAsync(`git config --global --add safe.directory ${repo}`, { cwd: repo }).catch(() => { });
+        await execAsync(`git config --global --add safe.directory ${repo}`, { cwd: repo, ...execOpts }).catch(() => { });
+        await ensureGitHubHttpsPush(repo);
 
-        // Configure credential helper if token available
-        if (ghToken) {
-          await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: repo }).catch(() => { });
-        }
-
-        await execAsync('git add .', { cwd: repo });
+        await execAsync('git add .', { cwd: repo, ...execOpts });
 
         // Generate smart commit message
         const commitMsg = await generateCommitMessage(repo, true);
 
         try {
           // --no-verify skips pre-commit hooks which can block automated commits
-          await execAsync(`git commit --no-verify -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: repo });
+          await execAsync(`git commit --no-verify -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: repo, ...execOpts });
           console.log(`[SYNTROPY] Committed changes in ${submodule}: ${commitMsg}`);
-        } catch (e) {
-          // No changes to commit
+        } catch (e: any) {
+          if (!isNothingToCommit(e)) {
+            console.warn(`[SYNTROPY] Commit failed for ${submodule}: ${(e?.stderr || e?.message || '').toString().trim()}`);
+            // Avoid leaving the repo perpetually staged if commit fails for reasons other than "nothing to commit"
+            await execAsync('git reset', { cwd: repo, ...execOpts }).catch(() => { });
+          }
         }
 
         try {
-          const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo });
-          await execAsync(`git push origin ${branch.trim()}`, { cwd: repo });
+          const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repo, ...execOpts });
+          const branch = branchRaw.trim();
+
+          if (branch === 'HEAD') {
+            const defaultBranch = await getDefaultBranch(repo);
+            await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: repo, ...execOpts });
+            // Move detached HEAD onto the default branch after a successful push
+            await execAsync(`git checkout -B ${defaultBranch} origin/${defaultBranch}`, { cwd: repo, ...execOpts }).catch(() => { });
+          } else {
+            await execAsync(`git push origin ${branch}`, { cwd: repo, ...execOpts });
+          }
+
           console.log(`[SYNTROPY] Pushed ${submodule}`);
         } catch (e: any) {
-          console.warn(`[SYNTROPY] Push failed for ${submodule}: ${e.message}`);
+          console.warn(`[SYNTROPY] Push failed for ${submodule}: ${(e?.stderr || e?.message || '').toString().trim()}`);
         }
       } catch (e) {
         // Ignore general git errors
@@ -181,37 +274,43 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
 
     // Step 2: Update parent repo with new submodule pointers
     try {
-      await execAsync(`git config --global --add safe.directory ${PIXEL_ROOT}`, { cwd: PIXEL_ROOT }).catch(() => { });
-
-      if (ghToken) {
-        await execAsync(`git config credential.helper '!f() { echo "password=${ghToken}"; }; f'`, { cwd: PIXEL_ROOT }).catch(() => { });
-      }
+      await execAsync(`git config --global --add safe.directory ${PIXEL_ROOT}`, { cwd: PIXEL_ROOT, ...execOpts }).catch(() => { });
+      await ensureGitHubHttpsPush(PIXEL_ROOT);
 
       // Stage submodule pointer updates
       for (const submodule of submodules) {
-        await execAsync(`git add ${submodule}`, { cwd: PIXEL_ROOT }).catch(() => { });
+        await execAsync(`git add ${submodule}`, { cwd: PIXEL_ROOT, ...execOpts }).catch(() => { });
       }
 
       // Also add any other changes in parent repo
-      await execAsync('git add .', { cwd: PIXEL_ROOT });
+      await execAsync('git add .', { cwd: PIXEL_ROOT, ...execOpts });
 
       // Generate smart commit message for parent
       const parentCommitMsg = await generateCommitMessage(PIXEL_ROOT, false);
 
       try {
         // --no-verify skips pre-commit hooks which can block automated commits
-        await execAsync(`git commit --no-verify -m "${parentCommitMsg.replace(/"/g, '\\"')}"`, { cwd: PIXEL_ROOT });
+        await execAsync(`git commit --no-verify -m "${parentCommitMsg.replace(/"/g, '\\"')}"`, { cwd: PIXEL_ROOT, ...execOpts });
         console.log(`[SYNTROPY] Committed in parent: ${parentCommitMsg}`);
-      } catch (e) {
-        // No changes
+      } catch (e: any) {
+        if (!isNothingToCommit(e)) {
+          console.warn(`[SYNTROPY] Commit failed for parent: ${(e?.stderr || e?.message || '').toString().trim()}`);
+          await execAsync('git reset', { cwd: PIXEL_ROOT, ...execOpts }).catch(() => { });
+        }
       }
 
       try {
-        const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: PIXEL_ROOT });
-        await execAsync(`git push origin ${branch.trim()}`, { cwd: PIXEL_ROOT });
+        const { stdout: branchRaw } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: PIXEL_ROOT, ...execOpts });
+        const branch = branchRaw.trim();
+        if (branch === 'HEAD') {
+          const defaultBranch = await getDefaultBranch(PIXEL_ROOT);
+          await execAsync(`git push origin HEAD:${defaultBranch}`, { cwd: PIXEL_ROOT, ...execOpts });
+        } else {
+          await execAsync(`git push origin ${branch}`, { cwd: PIXEL_ROOT, ...execOpts });
+        }
         console.log('[SYNTROPY] Pushed parent repo');
       } catch (e: any) {
-        console.warn(`[SYNTROPY] Push failed for parent: ${e.message}`);
+        console.warn(`[SYNTROPY] Push failed for parent: ${(e?.stderr || e?.message || '').toString().trim()}`);
       }
     } catch (e) {
       // Parent sync error
