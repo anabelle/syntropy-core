@@ -126,6 +126,25 @@ The reason you provide becomes the commit message - make it descriptive!`,
     }),
     execute: async () => {
       console.log('[SYNTROPY] Tool: checkTreasury');
+
+      // Try API first (Postgres source)
+      try {
+        const statsUrl = process.env.NODE_ENV === 'production' ? 'http://api:3000/api/stats' : 'http://localhost:3000/api/stats';
+        const response = await fetch(statsUrl);
+        if (response.ok) {
+          const stats = await response.json() as any;
+          const data = {
+            totalSats: stats.totalSats || 0,
+            transactionCount: stats.totalPixels || 0,
+            source: 'api'
+          };
+          await logAudit({ type: 'treasury_check', ...data });
+          return data;
+        }
+      } catch (err: any) {
+        console.warn(`[SYNTROPY] Treasury API fetch failed (${err.message}), falling back to SQLite`);
+      }
+
       let db;
       try {
         if (!fs.existsSync(DB_PATH)) return "Database not found";
@@ -134,7 +153,7 @@ The reason you provide becomes the commit message - make it descriptive!`,
         db = new Database(DB_PATH);
         const result = db.query('SELECT SUM(sats) as total FROM pixels').get() as any;
         const activityCount = db.query('SELECT COUNT(*) as count FROM activity').get() as any;
-        const data = { totalSats: result?.total || 0, transactionCount: activityCount?.count || 0 };
+        const data = { totalSats: result?.total || 0, transactionCount: activityCount?.count || 0, source: 'sqlite' };
         await logAudit({ type: 'treasury_check', ...data });
         return data;
       } catch (error: any) {
