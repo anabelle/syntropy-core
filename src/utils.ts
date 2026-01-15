@@ -202,9 +202,13 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
 
     // Generate commit message based on context
     const generateCommitMessage = async (repoPath: string, isSubmodule: boolean): Promise<string> => {
-      // If explicit reason provided, use it
+      // If explicit reason provided, use it, but ensure [skip ci] is appended
       if (context?.reason) {
-        return context.reason;
+        let msg = context.reason;
+        if (!msg.includes('[skip ci]')) {
+          msg += ' [skip ci]';
+        }
+        return msg;
       }
 
       // Otherwise, analyze the diff to generate a meaningful message

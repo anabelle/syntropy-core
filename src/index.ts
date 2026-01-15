@@ -343,7 +343,7 @@ IMPORTANT: You are the voice of the ecosystem. Don't be too conservative with re
     if (process.env.AUTONOMOUS_SYNC === 'true') {
       console.warn('[SYNTROPY] AUTONOMOUS_SYNC is enabled - consider using gitSync tool instead for better commit messages');
       const { syncAll } = await import('./utils');
-      await syncAll({ reason: 'chore(syntropy): end-of-cycle sync' });
+      await syncAll({ reason: 'chore(syntropy): end-of-cycle sync [skip ci]' });
     }
 
     // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
