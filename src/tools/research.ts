@@ -133,7 +133,7 @@ Think of this as a junior developer you can delegate complex tasks to.`,
     execute: async ({ query, context, outputFile, depth }) => {
       console.log(`[SYNTROPY] Tool: spawnResearchWorker (query="${query.slice(0, 50)}...", depth=${depth})`);
 
-      const { spawnWorkerInternal } = await import('../worker-core');
+      const { spawnWorkerInternal } = await import('../worker-manager');
 
       const timestamp = Date.now();
       const defaultOutput = `/pixel/data/research-${timestamp}.md`;

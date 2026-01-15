@@ -8,7 +8,7 @@ import { refactoringTools } from './tools/refactoring';
 import { diaryTools } from './tools/diary';
 import { researchTools } from './tools/research';
 import { ideationTools } from './tools/ideation';
-import { workerTools } from './worker-core';
+import { workerTools } from './tools/worker';
 import { selfExaminationTools } from './self-examination';
 
 export const tools = {

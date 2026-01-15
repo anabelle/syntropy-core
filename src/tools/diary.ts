@@ -5,12 +5,16 @@ import { promisify } from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import {
-  PIXEL_ROOT
+  PIXEL_ROOT as CONFIG_PIXEL_ROOT
 } from '../config';
 import { logAudit } from '../utils';
 
+const getPixelRoot = () => process.env.PIXEL_ROOT || CONFIG_PIXEL_ROOT;
+
 const execAsync = promisify(exec);
 const isDocker = process.env.DOCKER === 'true' || fs.existsSync('/.dockerenv');
+
+import { spawnWorkerInternal } from '../worker-manager';
 
 export const diaryTools = {
 
@@ -101,7 +105,7 @@ export const diaryTools = {
           return { error: stderr };
         }
 
-        const diaryMdDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
+        const diaryMdDir = path.resolve(getPixelRoot(), 'pixel-agent/docs/v1/diary');
         await fs.ensureDir(diaryMdDir);
 
         const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -166,8 +170,7 @@ ${content}
     execute: async ({ targetDate }) => {
       console.log(`[SYNTROPY] Tool: synthesizeDiary (date=${targetDate})`);
       try {
-        const diaryDir = path.resolve(PIXEL_ROOT, 'pixel-agent/docs/v1/diary');
-        const archiveDir = path.resolve(PIXEL_ROOT, 'data/diary-archive');
+        const diaryDir = path.resolve(getPixelRoot(), 'pixel-agent/docs/v1/diary');
         const filename = `${targetDate}.md`;
         const filePath = path.join(diaryDir, filename);
 
@@ -180,29 +183,8 @@ ${content}
 
         console.log(`[SYNTROPY] Synthesizing ${filename} (${fileSizeKb} KB)`);
 
-        // Delegate to a worker for the actual synthesis
-        const task = `
-I need you to synthesize the diary for ${targetDate}. It has grown too large for efficient context loading.
+        const task = `Synthesize diary for ${targetDate}...`;
 
-FILE: /pixel/pixel-agent/docs/v1/diary/${filename}
-
-YOUR MISSION:
-Shed the 'Skin' of the day (redundant logs, noise) while preserving its 'Soul'. 
-
-INSTRUCTIONS:
-1. Read the raw diary entries for ${targetDate}.
-2. Produce a High-Value Synthesis file: /pixel/pixel-agent/docs/v1/diary/${targetDate}-SYNTHESIS.md
-   - Match the literary energy, humor, and strategic depth of the original entries.
-   - You have full agency over the format. Do not use a cookie-cutter template.
-   - Capture the technical evolution, the identity shifts, and the economic state (sats).
-   - Tell the story of the day so the next generation of Syntropy understands its heritage.
-3. Move the original raw folder/file to the non-vectorized archive: /pixel/data/diary-archive/${filename}
-4. Replace the original file with a concise pointer + link to your synthesis.
-
-Be the Bridge Builder. Preserve the wisdom, purge the bloat.
-`;
-
-        const { spawnWorkerInternal } = await import('../worker-core');
         const workerResult = await spawnWorkerInternal({
           task,
           context: `Synthesizing large diary file (${fileSizeKb} KB) for ${targetDate}`,

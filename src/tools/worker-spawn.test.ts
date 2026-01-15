@@ -13,7 +13,7 @@ describe('Worker Spawn Regression Tests', () => {
     // Bug: containerName was used in recordWorkerEvent before being declared
     // Error: "Cannot access 'containerName' before initialization"
     it('should declare containerName before using it in recordWorkerEvent', () => {
-        const workerCorePath = path.join(__dirname, '../worker-core.ts');
+        const workerCorePath = path.join(__dirname, '../worker-manager.ts');
         const source = fs.readFileSync(workerCorePath, 'utf-8');
 
         // Find the line numbers where containerName is declared and where recordWorkerEvent uses it
@@ -55,7 +55,7 @@ describe('Worker Spawn Regression Tests', () => {
     });
 
     it('should have spawnWorkerInternal as an exported async function', async () => {
-        const WorkerCore = await import('../worker-core.ts');
+        const WorkerCore = await import('../worker-manager');
         expect(typeof WorkerCore.spawnWorkerInternal).toBe('function');
     });
 });
