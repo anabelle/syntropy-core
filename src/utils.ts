@@ -202,11 +202,11 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
 
     // Generate commit message based on context
     const generateCommitMessage = async (repoPath: string, isSubmodule: boolean): Promise<string> => {
-      // If explicit reason provided, use it, but ensure [skip ci] is appended
+      // If explicit reason provided, use it, but ensure [skip cd] is appended
       if (context?.reason) {
         let msg = context.reason;
-        if (!msg.includes('[skip ci]')) {
-          msg += ' [skip ci]';
+        if (!msg.includes('[skip cd]')) {
+          msg += ' [skip cd]';
         }
         return msg;
       }
@@ -265,12 +265,12 @@ export const syncAll = async (context?: { reason?: string; files?: string[] }) =
         }
 
         const scope = isSubmodule ? path.basename(repoPath) : 'pixel';
-        return `chore(${scope}): ${parts.join(', ')} [skip ci]`;
+        return `chore(${scope}): ${parts.join(', ')} [skip cd]`;
       } catch (e) {
         // Fallback to generic message
         return isSubmodule
-          ? `chore(${path.basename(repoPath)}): sync [skip ci]`
-          : 'chore(syntropy): update submodule refs [skip ci]';
+          ? `chore(${path.basename(repoPath)}): sync [skip cd]`
+          : 'chore(syntropy): update submodule refs [skip cd]';
       }
     };
 
