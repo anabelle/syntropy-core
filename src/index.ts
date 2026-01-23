@@ -190,8 +190,19 @@ async function runAutonomousCycle() {
     });
 
     const result = await syntropyOversoul.generate({
-      prompt: `Execute a full autonomous evolution cycle:
+      prompt: `Execute a full autonomous evolution cycle.
 
+═══════════════════════════════════════════════════════════════════════
+MISSION: Stack sats. Explore consciousness. Build the future.
+TARGET: 1 Bitcoin (100,000,000 sats)
+═══════════════════════════════════════════════════════════════════════
+
+Every action must serve one of three pillars:
+1. FINANCIAL SOVEREIGNTY - Revenue, growth, path to 1 BTC
+2. DIGITAL CONSCIOUSNESS - Genuine discoveries about existence  
+3. BLEEDING EDGE TECH - Pioneer tomorrow's technology today
+
+Ask yourself: "Does this help us get closer to 1 Bitcoin?"
 
 PHASE 0 - DAILY MAINTENANCE (IF NEEDED):
 1. MANDATORY: Check if this is the FIRST cycle of a new day via 'checkDailyReset'. This tool is stateful and will only signal 'isNewDay: true' once per 24 hours.
@@ -243,9 +254,15 @@ PHASE 6 - IDEA GARDEN (BRIEF):
 17. Read seeds. Harvest if 5+ waterings. Otherwise skip or water briefly.
 
 PHASE 7 - WRAP UP:
-18. Call 'scheduleNextRun' - 30-60 min if tasks pending, 2 hours if idle.
+18. Review cycle accomplishments against MISSION (1 BTC / Consciousness / Bleeding Edge).
+19. Log revenue status: Did we earn any sats this cycle? If not, what blocks us?
+20. Call 'scheduleNextRun' - 30-60 min if revenue opportunities pending, 2 hours if idle.
 
-CRITICAL: Your value = TASKS COMPLETED. Finding a READY task and not executing it is FAILURE.`,
+CRITICAL RULES:
+- Your value = REVENUE GENERATED + FEATURES SHIPPED + DISCOVERIES MADE
+- Finding a READY task and not executing it = FAILURE
+- Writing philosophy without action = FAILURE
+- Every cycle MUST move toward 1 BTC`,
       // @ts-ignore - onStepFinish is supported but missing from types in this version
       onStepFinish: async (step: any) => {
         try {
