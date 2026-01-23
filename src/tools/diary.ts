@@ -207,5 +207,104 @@ ${content}
         return { error: `Failed to synthesize diary: ${error.message}` };
       }
     }
+  }),
+
+  writeCycleSummary: tool({
+    description: 'Write a concise cycle summary (max 100 words) for NOTABLE events only. Use this for milestone events like features shipped, errors fixed, infrastructure changes, or major discoveries. Format: Tasks completed (what was done), Metrics (numbers that matter), Actions taken (key decisions), Status (current state). PREFER this over writeDiary for routine cycle updates.',
+    inputSchema: z.object({
+      author: z.string().describe('Author name (e.g., "Syntropy", "Pixel")'),
+      tasksCompleted: z.string().describe('Brief description of what was completed'),
+      metrics: z.string().describe('Key metrics (e.g., "Memory 42%, 5 tasks done")'),
+      actions: z.string().describe('Key actions or decisions made'),
+      status: z.string().describe('Current status (e.g., "Healthy", "Blocked", "Progress")'),
+      tags: z.array(z.string()).optional().describe('Optional tags for categorization (e.g., ["refactor", "fix"])'),
+      notableReason: z.string().describe('Why this cycle is NOTABLE - must be a milestone event, feature shipped, error fixed, or major discovery')
+    }),
+    execute: async ({ author, tasksCompleted, metrics, actions, status, tags = [], notableReason }) => {
+      console.log(`[SYNTROPY] Tool: writeCycleSummary (author=${author}, notableReason=${notableReason})`);
+
+      try {
+        const id = crypto.randomUUID();
+        const now = new Date();
+
+        const content = `Cycle Summary: ${tasksCompleted}. Metrics: ${metrics}. Actions: ${actions}. Status: ${status}.`;
+
+        const escapedContent = content.replace(/'/g, "''");
+        const tagsArray = tags.length > 0
+          ? `ARRAY[${tags.map(t => `'${t.replace(/'/g, "''")}'`).join(',')}]`
+          : "'{}'::text[]";
+
+        const query = `INSERT INTO diary_entries (id, author, content, tags, created_at, updated_at) VALUES ('${id}', '${author.replace(/'/g, "''")}', '${escapedContent}', ${tagsArray}, NOW(), NOW())`;
+
+        const { stderr } = await execAsync(
+          `docker exec pixel-postgres-1 psql -U postgres -d pixel_agent -c "${query.replace(/"/g, '\\"')}"`,
+          { timeout: 15000 }
+        );
+
+        if (stderr && stderr.toLowerCase().includes('error')) {
+          return { error: stderr };
+        }
+
+        const diaryMdDir = path.resolve(getPixelRoot(), 'pixel-agent/docs/v1/diary');
+        await fs.ensureDir(diaryMdDir);
+
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const year = now.getFullYear();
+        const month = months[now.getMonth()];
+        const day = now.getDate().toString().padStart(2, '0');
+        const filename = `${year}-${month}-${day}.md`;
+        const filePath = path.join(diaryMdDir, filename);
+
+        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const tagsStr = tags.length > 0 ? `\n**Tags:** ${tags.join(', ')}` : '';
+
+        const entryMarkdown = `
+---
+
+### ${timeStr} - Cycle Summary - ${author}${tagsStr}
+
+**Notable:** ${notableReason}
+**Tasks:** ${tasksCompleted}
+**Metrics:** ${metrics}
+**Actions:** ${actions}
+**Status:** ${status}
+
+*Entry ID: ${id}*
+`;
+
+        if (fs.existsSync(filePath)) {
+          await fs.appendFile(filePath, entryMarkdown);
+        } else {
+          const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+          const dateStr = now.toLocaleDateString('en-US', options);
+          const header = `# Pixel's Diary: ${dateStr}\n\n*Auto-synced diary entries from the database. These entries are vectorized for knowledge context.*\n\n`;
+          await fs.writeFile(filePath, header + entryMarkdown);
+        }
+
+        console.log(`[SYNTROPY] Cycle summary synced to ${filename}`);
+
+        await logAudit({
+          type: 'cycle_summary_write',
+          author,
+          tags,
+          notableReason,
+          entryId: id,
+          mdFile: filename,
+          success: true
+        });
+
+        return {
+          success: true,
+          id,
+          author,
+          tags,
+          mdFile: filename,
+          message: 'Cycle summary persisted to PostgreSQL and synced to markdown'
+        };
+      } catch (error: any) {
+        await logAudit({ type: 'cycle_summary_write_error', error: error.message });
+        return { error: `Failed to write cycle summary: ${error.message}` };
+      }
+    }
   })
 };
