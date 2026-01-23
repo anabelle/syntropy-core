@@ -76,10 +76,12 @@ export const selfExaminationTools = {
     Use this AFTER Phase 3 (Task Execution) and BEFORE Phase 4 (Knowledge Retention).`,
     inputSchema: z.object({
       domains: z.array(z.enum(['relationships', 'treasury', 'infrastructure', 'code-quality', 'all'])).default(['all']).describe('Domains to examine. Default: all'),
-      cycleNumber: z.number().optional().describe('Current cycle number for tracking evolution')
+      cycleNumber: z.number().optional().describe('Current cycle number for tracking evolution'),
+      tasksCompletedThisCycle: z.number().default(0).describe('Number of tasks successfully completed this cycle'),
+      tasksAttempted: z.number().default(0).describe('Number of tasks attempted this cycle (successful or failed)')
     }),
-    execute: async ({ domains, cycleNumber }) => {
-      console.log(`[SYNTROPY] Self-Examination Protocol - Domains: ${domains.join(', ')}`);
+    execute: async ({ domains, cycleNumber, tasksCompletedThisCycle = 0, tasksAttempted = 0 }) => {
+      console.log(`[SYNTROPY] Self-Examination Protocol - Domains: ${domains.join(', ')}, Progress: ${tasksCompletedThisCycle}/${tasksAttempted} tasks`);
       
       try {
         const results = {
@@ -88,7 +90,9 @@ export const selfExaminationTools = {
           domainsExamined: domains.includes('all') ? ['relationships', 'treasury', 'infrastructure', 'code-quality'] : domains,
           mismatches: [] as StateMismatch[],
           insights: [] as string[],
-          overallHealth: 'unknown' as 'healthy' | 'degraded' | 'critical'
+          overallHealth: 'idle' as 'healthy' | 'idle' | 'blocked',
+          tasksCompletedThisCycle,
+          tasksAttempted
         };
         
         // Expand 'all' to specific domains
@@ -108,14 +112,11 @@ export const selfExaminationTools = {
           results.mismatches.push(...mismatches);
         }
         
-        // 3. Assess overall health
-        const criticalCount = results.mismatches.filter(m => m.severity === 'critical').length;
-        const highCount = results.mismatches.filter(m => m.severity === 'high').length;
-        
-        if (criticalCount > 0) {
-          results.overallHealth = 'critical';
-        } else if (highCount > 2) {
-          results.overallHealth = 'degraded';
+        // 3. Assess overall health based on progress
+        if (tasksAttempted === 0) {
+          results.overallHealth = 'idle';
+        } else if (tasksCompletedThisCycle === 0) {
+          results.overallHealth = 'blocked';
         } else {
           results.overallHealth = 'healthy';
         }
@@ -129,7 +130,11 @@ export const selfExaminationTools = {
           domains: domainsToExamine,
           mismatches: results.mismatches.length,
           insights: results.insights.length,
-          health: results.overallHealth
+          health: results.overallHealth,
+          progress: {
+            completed: tasksCompletedThisCycle,
+            attempted: tasksAttempted
+          }
         });
         
         return results;
@@ -510,5 +515,7 @@ export interface SelfExaminationResult {
   domainsExamined: string[];
   mismatches: StateMismatch[];
   insights: string[];
-  overallHealth: 'healthy' | 'degraded' | 'critical';
+  overallHealth: 'healthy' | 'idle' | 'blocked';
+  tasksCompletedThisCycle: number;
+  tasksAttempted: number;
 }
