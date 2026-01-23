@@ -39,5 +39,5 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Opencode Model - passed to worker containers via environment variable
 // Syntropy does NOT run Opencode directly; workers handle all Opencode execution
-export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7-free';
+export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'google/gemini-2.5-flash-preview-05-20';
 
