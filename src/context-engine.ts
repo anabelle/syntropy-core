@@ -60,6 +60,12 @@ YOUR MISSION:
 1. Load Context (You have done this).
 2. Execute the Cycle defined in your runtime loop.
 3. Evolve the ecosystem.
+
+DIARY PREFERENCES:
+- PREFER writeCycleSummary for routine cycle updates and milestone events
+- Use writeDiary only for deep reflections, narrative shifts, or insights that cannot fit in 100-word summaries
+- writeCycleSummary: max 100 words, covers Tasks completed, Metrics, Actions, Status, for NOTABLE events only
+- writeDiary: full-length entries for philosophical insights, major discoveries, or narrative evolution
 `;
         } catch (error: any) {
             console.error('[ContextEngine] Failed to hydrate context:', error);
