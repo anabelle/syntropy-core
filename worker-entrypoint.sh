@@ -178,7 +178,7 @@ OPENCODE_LIVE_LOG="/pixel/logs/opencode_live.log"
 EXIT_CODE=0
 
 # Headless configuration
-OPENCODE_MODEL="${OPENCODE_MODEL:-opencode/glm-4.7-free}"
+OPENCODE_MODEL="${OPENCODE_MODEL:-opencode/glm-4.7}"
 WORKER_TIMEOUT_SECONDS="${WORKER_TIMEOUT_SECONDS:-2700}"  # 45 minutes default
 
 echo "[WORKER] Using model: $OPENCODE_MODEL"
