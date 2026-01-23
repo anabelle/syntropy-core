@@ -127,6 +127,21 @@ The reason you provide becomes the commit message - make it descriptive!`,
     execute: async () => {
       console.log('[SYNTROPY] Tool: checkTreasury');
 
+      // Read zaps from the zap tracking log
+      let zapsTotal = 0;
+      let zapsCount = 0;
+      try {
+        const zapLogPath = '/pixel/data/zaps-received.json';
+        if (fs.existsSync(zapLogPath)) {
+          const zapLog = JSON.parse(fs.readFileSync(zapLogPath, 'utf8'));
+          zapsCount = zapLog.length;
+          zapsTotal = zapLog.reduce((sum: number, z: any) => sum + (z.sats || 0), 0);
+          console.log(`[SYNTROPY] Zaps treasury: ${zapsTotal} sats from ${zapsCount} zaps`);
+        }
+      } catch (err: any) {
+        console.warn(`[SYNTROPY] Failed to read zaps log: ${err.message}`);
+      }
+
       // Try API first (Postgres source)
       try {
         const statsUrl = process.env.NODE_ENV === 'production' ? 'http://api:3000/api/stats' : 'http://localhost:3000/api/stats';
@@ -134,9 +149,12 @@ The reason you provide becomes the commit message - make it descriptive!`,
         if (response.ok) {
           const stats = await response.json() as any;
           const data = {
-            totalSats: stats.totalSats || 0,
+            totalSats: (stats.totalSats || 0) + zapsTotal,
+            lnpixelsSats: stats.totalSats || 0,
+            zapsSats: zapsTotal,
+            zapsCount: zapsCount,
             transactionCount: stats.totalPixels || 0,
-            source: 'api'
+            source: 'api+zaps'
           };
           await logAudit({ type: 'treasury_check', ...data });
           return data;
