@@ -9,6 +9,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import * as http from 'http';
 import { ContextEngine } from './context-engine';
+import { getNextAvailableModel, isRateLimitError, handleRateLimitError } from './model-fallback';
 
 // ============================================
 // HEALTH ENDPOINT
@@ -156,13 +157,25 @@ const allTools = {
   })
 };
 
-// Create model based on provider selection
+// Create OpenRouter client (reused across model switches)
 const openrouter = createOpenRouter({
   apiKey: OPENROUTER_API_KEY,
 });
-const model = MODEL_PROVIDER === 'openrouter'
-  ? openrouter.chat(MODEL_NAME)
-  : openai(MODEL_NAME);
+
+// Factory function to create model instance (allows switching on rate limits)
+function createModelInstance(modelName: string) {
+  console.log(`[SYNTROPY] Creating model instance: ${modelName}`);
+  return MODEL_PROVIDER === 'openrouter'
+    ? openrouter.chat(modelName)
+    : openai(modelName);
+}
+
+// Get initial model (respects env var or uses fallback system)
+function getInitialModel(): { name: string; instance: any } {
+  // If MODEL_NAME is explicitly set, use it first
+  const name = MODEL_NAME || getNextAvailableModel().name;
+  return { name, instance: createModelInstance(name) };
+}
 
 // Agent instantiation moved to runAutonomousCycle for dynamic context hydration
 
@@ -174,23 +187,31 @@ async function runAutonomousCycle() {
   }
 
   runningCycle = true;
-  console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${MODEL_NAME}`);
-  await logAudit({ type: 'cycle_start', model: MODEL_NAME });
 
-  try {
-    // HYDRATE CONTEXT (Agency + Memory)
-    // We recreate the agent every cycle to ensure it uses the latest "Soul" (AGENTS.md)
-    const systemPrompt = await ContextEngine.hydrateSystemPrompt();
+  // Get current model (may have switched due to rate limits)
+  let currentModel = getInitialModel();
+  console.log(`[${new Date().toISOString()}] SYNTROPY CORE: STARTING CYCLE WITH ${currentModel.name}`);
+  await logAudit({ type: 'cycle_start', model: currentModel.name });
 
-    const syntropyOversoul = new ToolLoopAgent({
-      model: model as any,
-      instructions: systemPrompt,
-      tools: allTools,
-      stopWhen: stepCountIs(20),
-    });
+  // Retry loop for handling rate limits with model fallback
+  const MAX_MODEL_RETRIES = 3;
+  let modelRetries = 0;
 
-    const result = await syntropyOversoul.generate({
-      prompt: `Execute a full autonomous evolution cycle.
+  while (modelRetries < MAX_MODEL_RETRIES) {
+    try {
+      // HYDRATE CONTEXT (Agency + Memory)
+      // We recreate the agent every cycle to ensure it uses the latest "Soul" (AGENTS.md)
+      const systemPrompt = await ContextEngine.hydrateSystemPrompt();
+
+      const syntropyOversoul = new ToolLoopAgent({
+        model: currentModel.instance as any,
+        instructions: systemPrompt,
+        tools: allTools,
+        stopWhen: stepCountIs(20),
+      });
+
+      const result = await syntropyOversoul.generate({
+        prompt: `Execute a full autonomous evolution cycle.
 
 ═══════════════════════════════════════════════════════════════════════
 MISSION: Stack sats. Explore consciousness. Build the future.
@@ -288,116 +309,149 @@ CRITICAL RULES:
 - Finding a READY task and not executing it = FAILURE
 - Writing philosophy without action = FAILURE
 - Every cycle MUST move toward 1 BTC`,
-      // @ts-ignore - onStepFinish is supported but missing from types in this version
-      onStepFinish: async (step: any) => {
-        try {
-          if (step.toolResults && step.toolResults.length > 0) {
-            for (const tr of step.toolResults) {
-              if (tr.toolName === 'readCharacterFile' || tr.toolName === 'readContinuity') {
+        // @ts-ignore - onStepFinish is supported but missing from types in this version
+        onStepFinish: async (step: any) => {
+          try {
+            if (step.toolResults && step.toolResults.length > 0) {
+              for (const tr of step.toolResults) {
+                if (tr.toolName === 'readCharacterFile' || tr.toolName === 'readContinuity') {
+                  await logAudit({
+                    type: 'tool_result',
+                    tool: tr.toolName,
+                    success: !tr.isError,
+                    summary: tr.isError ? 'Error reading file' : 'File read successful (content hidden to reduce noise)'
+                  });
+                  continue;
+                }
+
+                let summary = '';
+                let argsSummary = '';
+                try {
+                  const rawResult = tr.result || tr.output;
+                  if (typeof rawResult === 'string') {
+                    summary = rawResult.slice(0, 500);
+                  } else if (rawResult !== undefined && rawResult !== null) {
+                    summary = JSON.stringify(rawResult).slice(0, 500);
+                  } else {
+                    summary = 'No result returned';
+                  }
+
+                  const rawArgs = tr.args || tr.input;
+                  if (rawArgs !== undefined && rawArgs !== null) {
+                    try {
+                      argsSummary = JSON.stringify(rawArgs).slice(0, 500);
+                    } catch (_e) {
+                      argsSummary = String(rawArgs).slice(0, 200);
+                    }
+                  }
+
+                  // redact known environment secrets from output
+                  summary = redactSecrets(summary);
+                  argsSummary = redactSecrets(argsSummary);
+                } catch (e) {
+                  summary = 'Error stringifying result';
+                }
+
                 await logAudit({
                   type: 'tool_result',
                   tool: tr.toolName,
                   success: !tr.isError,
-                  summary: tr.isError ? 'Error reading file' : 'File read successful (content hidden to reduce noise)'
+                  summary,
+                  args: argsSummary
                 });
-                continue;
               }
-
-              let summary = '';
-              let argsSummary = '';
-              try {
-                const rawResult = tr.result || tr.output;
-                if (typeof rawResult === 'string') {
-                  summary = rawResult.slice(0, 500);
-                } else if (rawResult !== undefined && rawResult !== null) {
-                  summary = JSON.stringify(rawResult).slice(0, 500);
-                } else {
-                  summary = 'No result returned';
-                }
-
-                const rawArgs = tr.args || tr.input;
-                if (rawArgs !== undefined && rawArgs !== null) {
-                  try {
-                    argsSummary = JSON.stringify(rawArgs).slice(0, 500);
-                  } catch (_e) {
-                    argsSummary = String(rawArgs).slice(0, 200);
-                  }
-                }
-
-                // redact known environment secrets from output
-                summary = redactSecrets(summary);
-                argsSummary = redactSecrets(argsSummary);
-              } catch (e) {
-                summary = 'Error stringifying result';
-              }
-
-              await logAudit({
-                type: 'tool_result',
-                tool: tr.toolName,
-                success: !tr.isError,
-                summary,
-                args: argsSummary
-              });
             }
+          } catch (stepErr) {
+            console.error('[SYNTROPY] Error in onStepFinish:', stepErr);
           }
-        } catch (stepErr) {
-          console.error('[SYNTROPY] Error in onStepFinish:', stepErr);
+        }
+      });
+
+      await logAudit({
+        type: 'cycle_complete',
+        steps: result.steps.map(s => ({
+          toolCalls: s.toolCalls?.map((tc: any) => ({
+            name: tc.toolName,
+            args: tc.args || tc.input
+          })),
+          text: s.text
+        }))
+      });
+
+      console.log('\n--- SYNTROPY OUTPUT ---\n', result.text.slice(0, 2000), '\n-----------------------\n');
+
+      // Auto-sync is DISABLED by default. Syntropy should use the gitSync tool explicitly
+      // when it has made meaningful changes worth committing.
+      // Legacy opt-in: set AUTONOMOUS_SYNC=true to enable blind sync at cycle end
+      if (process.env.AUTONOMOUS_SYNC === 'true') {
+        console.warn('[SYNTROPY] AUTONOMOUS_SYNC is enabled - consider using gitSync tool instead for better commit messages');
+        const { syncAll } = await import('./utils');
+        await syncAll({ reason: 'chore(syntropy): end-of-cycle sync [skip ci]' });
+      }
+
+      // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
+      try {
+        const { cleanupStaleTasksInternal } = await import('./worker-manager');
+        const result = await cleanupStaleTasksInternal(3);
+        if (result.removed > 0 || result.aborted > 0) {
+          console.log(`[SYNTROPY] Cleaned up ${result.removed} old tasks, ${result.aborted} stale tasks`);
+        }
+      } catch (e: any) {
+        console.warn('[SYNTROPY] Task cleanup failed:', e.message);
+      }
+
+      // Reset consecutive failures on success
+      consecutiveFailures = 0;
+      break; // Exit the retry loop on success
+    } catch (error: any) {
+      // Check if this is a rate limit error - if so, try fallback model
+      if (isRateLimitError(error)) {
+        const fallback = handleRateLimitError(currentModel.name, error);
+        if (fallback && modelRetries < MAX_MODEL_RETRIES - 1) {
+          console.log(`[SYNTROPY] Rate limit hit on ${currentModel.name}, switching to ${fallback.name}`);
+          await logAudit({
+            type: 'model_fallback',
+            from: currentModel.name,
+            to: fallback.name,
+            reason: 'rate_limit'
+          });
+          currentModel = { name: fallback.name, instance: createModelInstance(fallback.name) };
+          modelRetries++;
+          continue; // Retry with new model
         }
       }
-    });
 
-    await logAudit({
-      type: 'cycle_complete',
-      steps: result.steps.map(s => ({
-        toolCalls: s.toolCalls?.map((tc: any) => ({
-          name: tc.toolName,
-          args: tc.args || tc.input
-        })),
-        text: s.text
-      }))
-    });
+      // Not a rate limit error, or no fallback available
+      console.error('Syntropy Cycle Failed:', error);
+      await logAudit({ type: 'cycle_error', error: error.message });
+      consecutiveFailures += 1;
+      await logAudit({ type: 'consecutive_failure', count: consecutiveFailures });
 
-    console.log('\n--- SYNTROPY OUTPUT ---\n', result.text.slice(0, 2000), '\n-----------------------\n');
-
-    // Auto-sync is DISABLED by default. Syntropy should use the gitSync tool explicitly
-    // when it has made meaningful changes worth committing.
-    // Legacy opt-in: set AUTONOMOUS_SYNC=true to enable blind sync at cycle end
-    if (process.env.AUTONOMOUS_SYNC === 'true') {
-      console.warn('[SYNTROPY] AUTONOMOUS_SYNC is enabled - consider using gitSync tool instead for better commit messages');
-      const { syncAll } = await import('./utils');
-      await syncAll({ reason: 'chore(syntropy): end-of-cycle sync [skip ci]' });
-    }
-
-    // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
-    try {
-      const { cleanupStaleTasksInternal } = await import('./worker-manager');
-      const result = await cleanupStaleTasksInternal(3);
-      if (result.removed > 0 || result.aborted > 0) {
-        console.log(`[SYNTROPY] Cleaned up ${result.removed} old tasks, ${result.aborted} stale tasks`);
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        const delayMs = CIRCUIT_BREAKER_DELAY_MINUTES * 60 * 1000;
+        await setNextScheduledRun(delayMs, 'circuit breaker engaged due to repeated cycle failures');
+        await logAudit({ type: 'circuit_breaker_engaged', count: consecutiveFailures, delayMs });
+        console.warn(`[SYNTROPY] Circuit breaker engaged. Pausing cycles for ${CIRCUIT_BREAKER_DELAY_MINUTES} minutes.`);
       }
-    } catch (e: any) {
-      console.warn('[SYNTROPY] Task cleanup failed:', e.message);
+      break; // Exit loop on non-rate-limit errors
     }
-
-    // Reset consecutive failures on success
-    consecutiveFailures = 0;
-  } catch (error: any) {
-    console.error('Syntropy Cycle Failed:', error);
-    await logAudit({ type: 'cycle_error', error: error.message });
-    consecutiveFailures += 1;
-    await logAudit({ type: 'consecutive_failure', count: consecutiveFailures });
-
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      const delayMs = CIRCUIT_BREAKER_DELAY_MINUTES * 60 * 1000;
-      await setNextScheduledRun(delayMs, 'circuit breaker engaged due to repeated cycle failures');
-      await logAudit({ type: 'circuit_breaker_engaged', count: consecutiveFailures, delayMs });
-      console.warn(`[SYNTROPY] Circuit breaker engaged. Pausing cycles for ${CIRCUIT_BREAKER_DELAY_MINUTES} minutes.`);
-    }
-  } finally {
-    runningCycle = false;
-    // Schedule next run (which will apply backoff based on consecutiveFailures)
-    scheduleNextCycle();
   }
+
+  // Cleanup after all retries
+  try {
+    // Auto-cleanup old worker tasks to prevent ledger bloat (keep 3 days)
+    const { cleanupStaleTasksInternal } = await import('./worker-manager');
+    const result = await cleanupStaleTasksInternal(3);
+    if (result.removed > 0 || result.aborted > 0) {
+      console.log(`[SYNTROPY] Cleaned up ${result.removed} old tasks, ${result.aborted} stale tasks`);
+    }
+  } catch (e: any) {
+    console.warn('[SYNTROPY] Task cleanup failed:', e.message);
+  }
+
+  runningCycle = false;
+  // Schedule next run (which will apply backoff based on consecutiveFailures)
+  scheduleNextCycle();
 }
 
 async function scheduleNextCycle() {
