@@ -15,14 +15,14 @@ export interface ModelConfig {
     notes?: string;
 }
 
-// Free models available on OpenRouter (verified 2026-01-28 from openrouter.ai/models?q=free)
+// Free models available on OpenRouter (updated 2026-01-31)
 // Order matters - we try from top to bottom
 export const FREE_MODELS: ModelConfig[] = [
     {
-        name: 'google/gemini-2.0-flash-exp:free',
+        name: 'tngtech/deepseek-r1t2-chimera:free',
         provider: 'openrouter',
-        dailyLimit: 2000,
-        notes: 'Primary - fast and capable'
+        dailyLimit: 200,
+        notes: 'Primary - DeepSeek R1+V3 merger, good for tool-calling (verified working)'
     },
     {
         name: 'meta-llama/llama-3.3-70b-instruct:free',
@@ -31,22 +31,22 @@ export const FREE_MODELS: ModelConfig[] = [
         notes: 'Fallback - excellent instruction following'
     },
     {
-        name: 'google/gemma-3-27b-it:free',
-        provider: 'openrouter',
-        dailyLimit: 200,
-        notes: 'Fallback - Google open-source with function calling'
-    },
-    {
         name: 'deepseek/deepseek-r1-0528:free',
         provider: 'openrouter',
         dailyLimit: 50,
         notes: 'Fallback - strong reasoning (o1-level)'
     },
     {
-        name: 'tngtech/deepseek-r1t2-chimera:free',
+        name: 'qwen/qwen3-235b-a22b:free',
         provider: 'openrouter',
         dailyLimit: 200,
-        notes: 'Fallback - DeepSeek R1+V3 merger, good for tool-calling'
+        notes: 'Fallback - large Qwen model'
+    },
+    {
+        name: 'microsoft/phi-4:free',
+        provider: 'openrouter',
+        dailyLimit: 200,
+        notes: 'Fallback - Microsoft small but capable'
     }
 ];
 
@@ -112,11 +112,17 @@ export function getNextAvailableModel(): ModelConfig {
 export function isRateLimitError(error: any): boolean {
     if (!error) return false;
     const message = error.message || String(error);
+    const cause = error.cause?.message || '';
+    const responseBody = error.responseBody || '';
+    const fullError = `${message} ${cause} ${responseBody}`;
+
     return (
-        message.includes('Rate limit') ||
-        message.includes('429') ||
-        message.includes('rate_limit') ||
-        message.includes('free-models-per-day')
+        fullError.includes('Rate limit') ||
+        fullError.includes('rate-limited') ||
+        fullError.includes('429') ||
+        fullError.includes('rate_limit') ||
+        fullError.includes('free-models-per-day') ||
+        fullError.includes('temporarily rate-limited upstream')
     );
 }
 
