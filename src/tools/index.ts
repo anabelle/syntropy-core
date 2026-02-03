@@ -8,6 +8,7 @@ export { refactoringTools } from './refactoring';
 export { diaryTools } from './diary';
 export { researchTools } from './research';
 export { ideationTools } from './ideation';
+export { baseTools } from './base';
 
 import { continuityTools } from './continuity';
 import { ecosystemTools } from './ecosystem';
@@ -19,6 +20,7 @@ import { refactoringTools } from './refactoring';
 import { diaryTools } from './diary';
 import { researchTools } from './research';
 import { ideationTools } from './ideation';
+import { baseTools } from './base';
 
 export const allTools = {
   ...continuityTools,
@@ -30,5 +32,6 @@ export const allTools = {
   ...refactoringTools,
   ...diaryTools,
   ...researchTools,
-  ...ideationTools
+  ...ideationTools,
+  ...baseTools
 };

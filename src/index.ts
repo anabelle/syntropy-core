@@ -1,9 +1,10 @@
 import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { openai } from '@ai-sdk/openai';
+import { google } from '@ai-sdk/google';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { logAudit } from './utils';
 import { tools } from './tools';
-import { MODEL_NAME, MODEL_PROVIDER, PIXEL_ROOT, OPENROUTER_API_KEY } from './config';
+import { MODEL_NAME, MODEL_PROVIDER, PIXEL_ROOT, OPENROUTER_API_KEY, GOOGLE_AI_API_KEY } from './config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { z } from 'zod';
@@ -164,10 +165,18 @@ const openrouter = createOpenRouter({
 
 // Factory function to create model instance (allows switching on rate limits)
 function createModelInstance(modelName: string) {
-  console.log(`[SYNTROPY] Creating model instance: ${modelName}`);
-  return MODEL_PROVIDER === 'openrouter'
-    ? openrouter.chat(modelName)
-    : openai(modelName);
+  console.log(`[SYNTROPY] Creating model instance: ${modelName} (provider: ${MODEL_PROVIDER})`);
+
+  switch (MODEL_PROVIDER) {
+    case 'google':
+      // Use Google AI SDK directly - cheaper and supports tools
+      return google(modelName, { apiKey: GOOGLE_AI_API_KEY });
+    case 'openrouter':
+      return openrouter.chat(modelName);
+    case 'openai':
+    default:
+      return openai(modelName);
+  }
 }
 
 // Get initial model (respects env var or uses fallback system)

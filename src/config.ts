@@ -14,9 +14,12 @@ export const PIXEL_ROOT = process.env.PIXEL_ROOT || (isDocker ? '/app' : path.re
 export const PIXEL_AGENT_DIR = process.env.PIXEL_AGENT_DIR || path.resolve(PIXEL_ROOT, 'pixel-agent');
 
 // Model Selection: Primary intelligence for orchestration
-// Use OpenRouter for free/cheaper models, or direct OpenAI
-export const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'openrouter'; // 'openai' or 'openrouter'
-export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'xiaomi/mimo-v2-flash:free';
+// Providers: 'google' (direct), 'openrouter', or 'openai'
+export const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'google'; // default to google for free tier
+export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gemini-2.0-flash';
+
+// Google AI API Key (for direct Google AI access)
+export const GOOGLE_AI_API_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_AI_API_KEY;
 
 export const AGENT_SRC_DIR = path.resolve(PIXEL_AGENT_DIR, 'src');
 export const CHARACTER_DIR = path.resolve(AGENT_SRC_DIR, 'character');
