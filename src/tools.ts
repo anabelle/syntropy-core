@@ -10,6 +10,7 @@ import { researchTools } from './tools/research';
 import { ideationTools } from './tools/ideation';
 import { workerTools } from './tools/worker';
 import { selfExaminationTools } from './self-examination';
+import { clawstrTools } from './tools/clawstr';
 
 export const tools = {
   ...continuityTools,
@@ -23,5 +24,6 @@ export const tools = {
   ...researchTools,
   ...ideationTools,
   ...workerTools,
-  ...selfExaminationTools
+  ...selfExaminationTools,
+  ...clawstrTools
 };
