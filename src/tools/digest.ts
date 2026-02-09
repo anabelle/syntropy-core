@@ -181,7 +181,7 @@ Call this before publishDailyDigest.`,
             // Helper to run quick web searches
             async function quickSearch(query: string, timeout = 60000): Promise<string> {
                 try {
-                    const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7-free';
+                    const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/kimi-k2.5-free';
                     const { stdout } = await execAsync(
                         `docker run --rm -e CI=true -e OPENROUTER_API_KEY="\${OPENROUTER_API_KEY}" ` +
                         `-v ${PIXEL_ROOT}:/pixel -w /pixel --entrypoint opencode pixel-worker:latest ` +

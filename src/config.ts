@@ -16,7 +16,9 @@ export const PIXEL_AGENT_DIR = process.env.PIXEL_AGENT_DIR || path.resolve(PIXEL
 // Model Selection: Primary intelligence for orchestration
 // Providers: 'google' (direct), 'openrouter', or 'openai'
 export const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'google'; // default to google for free tier
-export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gemini-2.0-flash';
+// gemini-3-flash-preview: Latest model, 3x faster than 2.5 Pro, better reasoning
+// Fallback: gemini-2.0-flash (deprecated March 2026)
+export const MODEL_NAME = process.env.SYNTROPY_MODEL || 'gemini-3-flash-preview';
 
 // Google AI API Key (for direct Google AI access)
 export const GOOGLE_AI_API_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_AI_API_KEY;
@@ -42,5 +44,5 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Opencode Model - passed to worker containers via environment variable
 // Syntropy does NOT run Opencode directly; workers handle all Opencode execution
-export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/glm-4.7';
+export const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/kimi-k2.5-free';
 
