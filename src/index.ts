@@ -387,6 +387,31 @@ CRITICAL RULES:
         }))
       });
 
+      // ── Mandatory post-cycle summary write ──
+      // Guarantees syntropy.json updates every cycle, not just when the LLM
+      // decides to call writeEvolutionReport. This is what the landing page
+      // displays as the "Cycle Report".
+      try {
+        const toolsUsed = [...new Set(
+          result.steps
+            .flatMap(s => s.toolCalls?.map((tc: any) => tc.toolName) || [])
+        )];
+        const stepsCompleted = result.steps.length;
+        const cycleSummary = {
+          lastUpdate: new Date().toISOString(),
+          title: `Cycle Summary`,
+          content: result.text.slice(0, 2000),
+          stepsCompleted,
+          toolsUsed,
+          status: consecutiveFailures === 0 ? 'CYCLE_COMPLETE' : `RECOVERED_AFTER_${consecutiveFailures}_FAILURES`,
+        };
+        const syntropyJsonPath = path.resolve(PIXEL_ROOT, 'pixel-landing/public/syntropy.json');
+        await fs.writeJson(syntropyJsonPath, cycleSummary, { spaces: 2 });
+        console.log(`[SYNTROPY] Cycle report written to syntropy.json (${stepsCompleted} steps, ${toolsUsed.length} tools)`);
+      } catch (e: any) {
+        console.warn('[SYNTROPY] Failed to write cycle report:', e.message);
+      }
+
       console.log('\n--- SYNTROPY OUTPUT ---\n', result.text.slice(0, 2000), '\n-----------------------\n');
 
       // Auto-sync is DISABLED by default. Syntropy should use the gitSync tool explicitly

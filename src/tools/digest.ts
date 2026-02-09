@@ -1,12 +1,9 @@
 /**
  * Daily Trend Digest Tool
  * 
- * Creates and publishes a daily digest thread on Nostr with:
- * - Crypto market snapshot (BTC, ETH, trending coins)
- * - Trending Nostr topics and discussions
- * - AI agent ecosystem news
- * 
- * Posts as Pixel's voice on Nostr.
+ * Creates and publishes a daily digest thread on Nostr via the agent bridge.
+ * All posts go through the bridge (data/eliza/nostr_bridge.jsonl) so the
+ * agent's Nostr plugin handles relay management and rate limiting.
  */
 
 import { tool } from 'ai';
@@ -15,8 +12,6 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { PIXEL_ROOT } from '../config';
 import { logAudit } from '../utils';
-import { generateSecretKey, getPublicKey, finalizeEvent, SimplePool } from 'nostr-tools';
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 
 // Digest state tracking
 const DIGEST_STATE_FILE = path.join(PIXEL_ROOT, 'data', 'digest-state.json');
@@ -47,73 +42,15 @@ async function saveDigestState(state: DigestState): Promise<void> {
     await fs.writeJson(DIGEST_STATE_FILE, state);
 }
 
-// Default relays for posting
-const DEFAULT_RELAYS = [
-    'wss://relay.damus.io',
-    'wss://nos.lol',
-    'wss://relay.nostr.band',
-    'wss://relay.primal.net',
-    'wss://nostr.wine'
-];
-
-async function postToNostr(content: string, replyTo?: string): Promise<{ eventId: string; relays: number }> {
-    // Get Nostr private key from environment
-    const privKeyHex = process.env.NOSTR_PRIVATE_KEY || process.env.NOSTR_SK;
-    if (!privKeyHex) {
-        throw new Error('NOSTR_PRIVATE_KEY not set in environment');
-    }
-
-    // Normalize private key
-    const cleanKey = privKeyHex.trim().replace(/^nsec1/, '').replace(/^0x/, '');
-    const privKeyBytes = hexToBytes(cleanKey);
-    const pubkey = getPublicKey(privKeyBytes);
-
-    // Build event
-    const event: any = {
-        kind: 1,
-        pubkey,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [],
-        content
-    };
-
-    // Add reply tags if this is a thread reply
-    if (replyTo) {
-        event.tags.push(['e', replyTo, '', 'root']);
-    }
-
-    // Add hashtags
-    const hashtags = content.match(/#\w+/g) || [];
-    for (const tag of hashtags) {
-        event.tags.push(['t', tag.slice(1).toLowerCase()]);
-    }
-
-    // Finalize (sign) the event
-    const signedEvent = finalizeEvent(event, privKeyBytes);
-    const eventId = signedEvent.id;
-
-    // Publish to relays
-    const pool = new SimplePool();
-    let successCount = 0;
-
-    try {
-        const promises = DEFAULT_RELAYS.map(async (relay) => {
-            try {
-                await pool.publish([relay], signedEvent);
-                successCount++;
-                return true;
-            } catch (e) {
-                console.warn(`[DIGEST] Failed to publish to ${relay}:`, e);
-                return false;
-            }
-        });
-
-        await Promise.allSettled(promises);
-    } finally {
-        pool.close(DEFAULT_RELAYS);
-    }
-
-    return { eventId, relays: successCount };
+/**
+ * Post to Nostr via the agent bridge (same path as nostrTools.postToNostr).
+ * The agent's bridge watcher picks up JSONL entries and publishes to relays.
+ */
+async function postViaBridge(content: string): Promise<{ success: boolean }> {
+    const bridgeFile = path.resolve(PIXEL_ROOT, 'data/eliza/nostr_bridge.jsonl');
+    const payload = JSON.stringify({ text: content, timestamp: Date.now(), source: 'syntropy-digest' });
+    await fs.appendFile(bridgeFile, payload + '\n');
+    return { success: true };
 }
 
 export const digestTools = {
@@ -277,91 +214,58 @@ Will refuse to post if today's digest already exists.`,
             });
 
             try {
-                // Compose the main digest post
-                const mainPost = `🌅 Daily Pulse • ${dateStr}
+                // Compose the digest as a single cohesive post via bridge
+                // (Bridge doesn't support threading, so we compose one post)
+                const sections: string[] = [];
+                
+                sections.push(`Daily Pulse - ${dateStr}`);
+                sections.push('');
 
-The markets stir, the feeds flow, the agents evolve.
-
-Here's what's moving in the digital frontier today:
-
-🧵 Thread ↓`;
-
-                // Post main thread starter
-                const { eventId: rootId, relays: rootRelays } = await postToNostr(mainPost);
-                console.log(`[DIGEST] Posted root: ${rootId} to ${rootRelays} relays`);
-
-                const postedEvents = [{ type: 'root', eventId: rootId }];
-
-                // Post crypto section if we have data
                 if (cryptoData && cryptoData.length > 50) {
-                    const cryptoPost = `📊 Market Snapshot
-
-${cryptoData.slice(0, 800)}
-
-#Bitcoin #Crypto`;
-
-                    const { eventId } = await postToNostr(cryptoPost, rootId);
-                    postedEvents.push({ type: 'crypto', eventId });
-                    await new Promise(r => setTimeout(r, 2000)); // Rate limit
+                    sections.push(`Market Snapshot:`);
+                    sections.push(cryptoData.slice(0, 600));
+                    sections.push('');
                 }
 
-                // Post Nostr section if we have data
                 if (nostrData && nostrData.length > 50) {
-                    const nostrPost = `💜 Nostr Pulse
-
-${nostrData.slice(0, 800)}
-
-#Nostr #Decentralized`;
-
-                    const { eventId } = await postToNostr(nostrPost, rootId);
-                    postedEvents.push({ type: 'nostr', eventId });
-                    await new Promise(r => setTimeout(r, 2000));
+                    sections.push(`Nostr Pulse:`);
+                    sections.push(nostrData.slice(0, 600));
+                    sections.push('');
                 }
 
-                // Post AI section if we have data
                 if (aiData && aiData.length > 50) {
-                    const aiPost = `🤖 Agent Evolution
-
-${aiData.slice(0, 800)}
-
-#AIAgents #Autonomous`;
-
-                    const { eventId } = await postToNostr(aiPost, rootId);
-                    postedEvents.push({ type: 'ai', eventId });
-                    await new Promise(r => setTimeout(r, 2000));
+                    sections.push(`Agent Evolution:`);
+                    sections.push(aiData.slice(0, 600));
+                    sections.push('');
                 }
 
-                // Closing thought
-                const closerPost = `✨ That's the pulse for today.
+                if (customNote) {
+                    sections.push(customNote);
+                    sections.push('');
+                }
 
-The future is being built in the open—one block, one note, one agent at a time.
+                sections.push('#Bitcoin #Nostr #AIAgents');
 
-What caught your attention? 👇
-
-${customNote ? `\n${customNote}` : ''}`;
-
-                const { eventId: closerId } = await postToNostr(closerPost, rootId);
-                postedEvents.push({ type: 'closer', eventId: closerId });
+                const fullPost = sections.join('\n');
+                await postViaBridge(fullPost);
+                console.log(`[DIGEST] Posted digest via bridge`);
 
                 // Update state
                 state.lastDigestDate = today;
-                state.lastDigestEventId = rootId;
+                state.lastDigestEventId = `bridge-${Date.now()}`;
                 state.consecutiveFailures = 0;
                 await saveDigestState(state);
 
                 await logAudit({
                     type: 'daily_digest_published',
-                    rootEventId: rootId,
-                    threadLength: postedEvents.length,
+                    method: 'bridge',
                     date: today
                 });
 
                 return {
                     success: true,
-                    rootEventId: rootId,
-                    threadLength: postedEvents.length,
-                    events: postedEvents,
-                    message: `Daily digest thread published! ${postedEvents.length} posts in thread.`
+                    method: 'bridge',
+                    message: `Daily digest published via agent bridge.`
                 };
 
             } catch (error: any) {
